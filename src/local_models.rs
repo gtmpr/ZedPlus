@@ -240,6 +240,64 @@ fn extract_params(lower: &str) -> Option<f32> {
     best
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn params(s: &str) -> Option<f32> {
+        extract_params(&s.to_lowercase())
+    }
+
+    #[test]
+    fn simple_suffixes() {
+        assert_eq!(params("llama3:7b"), Some(7.0));
+        assert_eq!(params("mistral:8b"), Some(8.0));
+        assert_eq!(params("codellama:70b"), Some(70.0));
+        assert_eq!(params("qwen2.5:0.5b"), Some(0.5));
+        assert_eq!(params("phi-4-14b"), Some(14.0));
+    }
+
+    #[test]
+    fn decimal_params() {
+        assert_eq!(params("qwen2.5-coder:1.5b"), Some(1.5));
+        assert_eq!(params("llama3.2:3b"), Some(3.0));
+    }
+
+    #[test]
+    fn mixed_case_and_separators() {
+        assert_eq!(params("Meta-Llama-3.1-8B-Instruct"), Some(8.0));
+        assert_eq!(params("mistral-7b-instruct"), Some(7.0));
+        assert_eq!(params("gemma4:27b"), Some(27.0));
+    }
+
+    #[test]
+    fn picks_largest_when_multiple() {
+        // "3.2" in the model version vs "8b" param — should pick 8
+        assert_eq!(params("llama3.2:8b"), Some(8.0));
+    }
+
+    #[test]
+    fn no_params_returns_none() {
+        assert_eq!(params("unknown-model"), None);
+        assert_eq!(params("nomic-embed-text"), None);
+    }
+
+    #[test]
+    fn score_model_coder_flag() {
+        let m = score_model("qwen2.5-coder:7b".to_string(), "ollama");
+        assert!(m.is_coder);
+        assert!(m.execution_score > m.reasoning_score);
+    }
+
+    #[test]
+    fn score_model_general_flag() {
+        let m = score_model("llama3:70b".to_string(), "ollama");
+        assert!(!m.is_coder);
+        assert_eq!(m.quality_tier, 5);
+        assert_eq!(m.speed_tier, 1);
+    }
+}
+
 /// Strip any path from a URL, keeping only scheme + host + port.
 /// "http://localhost:11434/api/v1" → "http://localhost:11434"
 fn strip_path(url: &str) -> String {

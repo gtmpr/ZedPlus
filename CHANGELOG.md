@@ -8,6 +8,18 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.8.0] - 2026-05-20
+
+### Added
+- **`zedplus config` command**: `--show` (pretty-prints active config), `--edit` (opens in `$EDITOR`/`VISUAL`/`notepad`), `--reset` (restores defaults), `--set KEY=VALUE` (sets ~15 config keys across routing, behavior, privacy, training, brainstorm sections). Persists to global `config.toml` immediately.
+- **Unit tests**: 22 new tests across `router::classifier` (7 task types), `router::cost` (token estimation and cost calculation), `router::rules` (alias selection and fallback), `local_models` (parameter extraction and model scoring). All 25 tests pass.
+- **README.md**: Full quickstart guide, install instructions (source + pre-built), REPL command table, one-shot usage, config, adaptive routing, distillation, session management, and default routing table.
+
+### Version bump
+`0.7.2` → `0.8.0`
+
+---
+
 ## [0.7.2] - 2026-05-20
 
 ### Added

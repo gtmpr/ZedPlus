@@ -1027,25 +1027,155 @@ fn cmd_model_rank() -> Result<()> {
 fn cmd_config(args: cli::ConfigArgs) -> Result<()> {
     if args.show {
         let cfg = config::load(Some(&std::env::current_dir()?))?;
-        println!("Locale:           {}/{}", cfg.config.locale.country, cfg.config.locale.timezone);
-        println!("Routing priority: {:?}", cfg.config.routing.priority);
-        println!("Cloud allowed:    {:?}", cfg.config.privacy.cloud_allowed);
-        println!("Stream:           {}", cfg.config.behavior.stream);
-        println!("\nRouting rules:");
-        let r = &cfg.config.routing.rules;
-        println!("  quick_completion:  {}", r.quick_completion);
-        println!("  code_review:       {}", r.code_review);
-        println!("  complex_reasoning: {}", r.complex_reasoning);
-        println!("  data_analysis:     {}", r.data_analysis);
-        println!("  documentation:     {}", r.documentation);
-        println!("  web_search:        {}", r.web_search);
-        println!("  fallback:          {}", r.fallback);
+        let c = &cfg.config;
+        let sep = "─".repeat(52);
+        println!("\n{sep}");
+        println!("  ZedPlus Configuration");
+        println!("{sep}");
+        println!("  File: {}", platform::dirs::global_config_file()?.display());
+        println!();
+        println!("  [locale]");
+        println!("    country  = {}", c.locale.country);
+        println!("    timezone = {}", c.locale.timezone);
+        println!("    language = {}", c.locale.language);
+        println!();
+        println!("  [behavior]");
+        println!("    stream              = {}", c.behavior.stream);
+        println!("    ui_style            = {:?}", c.behavior.ui_style);
+        println!("    default_scope       = {:?}", c.behavior.default_scope);
+        println!("    cost_nudge_usd      = ${}", c.behavior.cost_nudge_threshold_usd);
+        println!();
+        println!("  [routing]");
+        println!("    priority            = {:?}", c.routing.priority);
+        let r = &c.routing.rules;
+        println!("    rules.quick_completion  = {}", r.quick_completion);
+        println!("    rules.code_review       = {}", r.code_review);
+        println!("    rules.complex_reasoning = {}", r.complex_reasoning);
+        println!("    rules.data_analysis     = {}", r.data_analysis);
+        println!("    rules.documentation     = {}", r.documentation);
+        println!("    rules.web_search        = {}", r.web_search);
+        println!("    rules.fallback          = {}", r.fallback);
+        let ae = &c.routing.architect_editor;
+        println!("    architect_editor.enabled        = {}", ae.enabled);
+        println!("    architect_editor.architect_model = {}", ae.architect_model);
+        println!("    architect_editor.editor_model   = {}", ae.editor_model);
+        println!("    architect_editor.threshold_lines = {}", ae.threshold_lines);
+        println!();
+        println!("  [privacy]");
+        println!("    cloud_allowed = {:?}", c.privacy.cloud_allowed);
+        println!();
+        println!("  [training]");
+        println!("    auto_train     = {}", c.training.auto_train);
+        println!("    lora_rank      = {}", c.training.lora_rank);
+        println!("    primary_use    = {:?}", c.training.primary_use);
+        println!();
+        println!("  [brainstorm]");
+        println!("    default_strategy       = {}", c.brainstorm.default_strategy);
+        println!("    convergence_threshold  = {}", c.brainstorm.convergence_threshold);
+        println!("{sep}");
+        println!("  Edit: zedplus config --edit");
+        println!("  Set:  zedplus config --set routing.rules.code_review=gemini-pro-2-5");
+        println!("{sep}\n");
     } else if args.reset {
-        println!("Config reset — coming in Phase 12.");
+        config::write_global(&config::schema::Config::default())?;
+        println!("Config reset to defaults.");
+        println!("  {}", platform::dirs::global_config_file()?.display());
+    } else if args.edit {
+        let path = platform::dirs::global_config_file()?;
+        if !path.exists() {
+            config::write_global(&config::schema::Config::default())?;
+        }
+        let editor = std::env::var("EDITOR")
+            .or_else(|_| std::env::var("VISUAL"))
+            .unwrap_or_else(|_| if cfg!(windows) { "notepad".to_string() } else { "vi".to_string() });
+        std::process::Command::new(&editor).arg(&path).status()?;
     } else if let Some(kv) = args.set {
-        println!("Config set '{kv}' — coming in Phase 12.");
+        let (key, value) = kv.split_once('=')
+            .ok_or_else(|| anyhow::anyhow!("Expected KEY=VALUE format, e.g. routing.rules.code_review=gemini-pro-2-5"))?;
+        let cwd = std::env::current_dir()?;
+        let mut cfg = config::load(Some(&cwd))?.config;
+        apply_config_set(&mut cfg, key.trim(), value.trim())?;
+        config::write_global(&cfg)?;
+        println!("Set {} = {}", key.trim(), value.trim());
+        println!("  Saved to {}", platform::dirs::global_config_file()?.display());
     } else {
-        println!("Use --show, --edit, --reset, or --set KEY=VALUE.");
+        println!("Usage:");
+        println!("  zedplus config --show                        Show all settings");
+        println!("  zedplus config --edit                        Open config in $EDITOR");
+        println!("  zedplus config --reset                       Reset to defaults");
+        println!("  zedplus config --set KEY=VALUE               Change a setting");
+        println!();
+        println!("Settable keys:");
+        println!("  routing.rules.code_review / complex_reasoning / data_analysis");
+        println!("  routing.rules.documentation / web_search / quick_completion / fallback");
+        println!("  routing.priority            balanced | quality | cost | localfirst");
+        println!("  routing.architect_editor.enabled            true | false");
+        println!("  routing.architect_editor.threshold_lines    <number>");
+        println!("  behavior.stream             true | false");
+        println!("  behavior.ui_style           native | claudecode | geminicli");
+        println!("  privacy.cloud_allowed       true | false");
+        println!("  training.auto_train         true | false");
+        println!("  brainstorm.convergence_threshold  <0.0–1.0>");
+    }
+    Ok(())
+}
+
+fn apply_config_set(cfg: &mut config::schema::Config, key: &str, value: &str) -> Result<()> {
+    use config::schema::{RoutingPriority, UiStyle};
+    match key {
+        "routing.rules.quick_completion"  => cfg.routing.rules.quick_completion  = value.to_string(),
+        "routing.rules.code_review"       => cfg.routing.rules.code_review       = value.to_string(),
+        "routing.rules.complex_reasoning" => cfg.routing.rules.complex_reasoning = value.to_string(),
+        "routing.rules.data_analysis"     => cfg.routing.rules.data_analysis     = value.to_string(),
+        "routing.rules.documentation"     => cfg.routing.rules.documentation     = value.to_string(),
+        "routing.rules.web_search"        => cfg.routing.rules.web_search        = value.to_string(),
+        "routing.rules.fallback"          => cfg.routing.rules.fallback          = value.to_string(),
+        "routing.priority" => {
+            cfg.routing.priority = match value {
+                "balanced"   => RoutingPriority::Balanced,
+                "quality"    => RoutingPriority::Quality,
+                "cost"       => RoutingPriority::Cost,
+                "localfirst" => RoutingPriority::LocalFirst,
+                _ => anyhow::bail!("routing.priority must be: balanced | quality | cost | localfirst"),
+            };
+        }
+        "routing.architect_editor.enabled" => {
+            cfg.routing.architect_editor.enabled = value.parse()
+                .map_err(|_| anyhow::anyhow!("Expected true or false"))?;
+        }
+        "routing.architect_editor.threshold_lines" => {
+            cfg.routing.architect_editor.threshold_lines = value.parse()
+                .map_err(|_| anyhow::anyhow!("Expected an integer"))?;
+        }
+        "routing.architect_editor.architect_model" => cfg.routing.architect_editor.architect_model = value.to_string(),
+        "routing.architect_editor.editor_model"    => cfg.routing.architect_editor.editor_model    = value.to_string(),
+        "behavior.stream" => {
+            cfg.behavior.stream = value.parse()
+                .map_err(|_| anyhow::anyhow!("Expected true or false"))?;
+        }
+        "behavior.ui_style" => {
+            cfg.behavior.ui_style = match value {
+                "native"      => UiStyle::Native,
+                "claudecode"  => UiStyle::ClaudeCode,
+                "geminicli"   => UiStyle::GeminiCli,
+                _ => anyhow::bail!("ui_style must be: native | claudecode | geminicli"),
+            };
+        }
+        "privacy.cloud_allowed" => {
+            cfg.privacy.cloud_allowed = Some(value.parse()
+                .map_err(|_| anyhow::anyhow!("Expected true or false"))?);
+        }
+        "training.auto_train" => {
+            cfg.training.auto_train = value.parse()
+                .map_err(|_| anyhow::anyhow!("Expected true or false"))?;
+        }
+        "brainstorm.convergence_threshold" => {
+            cfg.brainstorm.convergence_threshold = value.parse()
+                .map_err(|_| anyhow::anyhow!("Expected a decimal between 0.0 and 1.0"))?;
+        }
+        other => anyhow::bail!(
+            "Unknown config key '{}'. Run 'zedplus config' to see settable keys.", other
+        ),
     }
     Ok(())
 }

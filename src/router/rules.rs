@@ -142,3 +142,100 @@ fn task_strength(task: &TaskType) -> &'static str {
         TaskType::QuickCompletion | TaskType::Fallback => "",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        costs::CostsTable,
+        models::{ModelCapabilities, ModelRegistry},
+        schema::{Config, RoutingRules},
+    };
+    use std::collections::HashMap;
+
+    fn make_registry_with(entries: &[(&str, &str, u8, bool, Vec<&str>)]) -> ModelRegistry {
+        let mut models = HashMap::new();
+        for (alias, id, quality, is_local, strengths) in entries {
+            models.insert(alias.to_string(), ModelCapabilities {
+                provider: "test".to_string(),
+                id: id.to_string(),
+                context_window: 100_000,
+                supports_search_grounding: false,
+                supports_vision: false,
+                supports_pdf: false,
+                supports_cache: false,
+                supports_reasoning: true,
+                quality_tier: *quality,
+                speed_tier: 3,
+                strengths: strengths.iter().map(|s| s.to_string()).collect(),
+                weaknesses: vec![],
+                is_local: *is_local,
+            });
+        }
+        ModelRegistry { models }
+    }
+
+    fn make_config_with_rules(rules: RoutingRules) -> Config {
+        let mut cfg = Config::default();
+        cfg.routing.rules = rules;
+        cfg
+    }
+
+    #[test]
+    fn select_alias_uses_configured_rule() {
+        let registry = make_registry_with(&[
+            ("gemini-flash", "gemini-flash-2.5", 3, false, vec!["web_search"]),
+        ]);
+        let cfg = Config::default(); // web_search → "gemini-flash"
+        let alias = select_alias(&TaskType::WebSearch, &cfg, &registry);
+        assert_eq!(alias, "gemini-flash");
+    }
+
+    #[test]
+    fn select_alias_falls_back_when_configured_missing() {
+        // Config points to "claude-sonnet" but only "gemini-flash" is in registry
+        let registry = make_registry_with(&[
+            ("gemini-flash", "gemini-flash-2.5", 3, false, vec!["code_review"]),
+        ]);
+        let cfg = Config::default(); // code_review → "claude-sonnet" (not in registry)
+        let alias = select_alias(&TaskType::CodeReview, &cfg, &registry);
+        // Should fall back to gemini-flash (best available with "code_review" strength)
+        assert_eq!(alias, "gemini-flash");
+    }
+
+    #[test]
+    fn select_alias_respects_project_override() {
+        let registry = make_registry_with(&[
+            ("my-model", "my-model-id", 4, false, vec![]),
+            ("gemini-flash", "gemini-flash-2.5", 3, false, vec![]),
+        ]);
+        let mut cfg = Config::default();
+        cfg.routing.overrides.insert("web_search".to_string(), "my-model".to_string());
+        let alias = select_alias(&TaskType::WebSearch, &cfg, &registry);
+        assert_eq!(alias, "my-model");
+    }
+
+    #[test]
+    fn select_alias_local_first_prefers_local() {
+        let registry = make_registry_with(&[
+            ("cloud-model", "cloud-id", 5, false, vec![]),
+            ("local-model", "local-id", 3, true, vec![]),
+        ]);
+        let mut cfg = Config::default();
+        cfg.routing.priority = RoutingPriority::LocalFirst;
+        let alias = select_alias(&TaskType::QuickCompletion, &cfg, &registry);
+        assert_eq!(alias, "local-model");
+    }
+
+    #[test]
+    fn select_alias_picks_highest_quality_when_fallback_needed() {
+        let registry = make_registry_with(&[
+            ("model-a", "model-a-id", 3, false, vec!["complex_reasoning"]),
+            ("model-b", "model-b-id", 5, false, vec!["complex_reasoning"]),
+        ]);
+        // Config points to "claude-sonnet" which is not in registry
+        let cfg = Config::default(); // complex_reasoning → "claude-sonnet"
+        let alias = select_alias(&TaskType::ComplexReasoning, &cfg, &registry);
+        assert_eq!(alias, "model-b"); // highest quality_tier
+    }
+}
