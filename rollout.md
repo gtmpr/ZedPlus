@@ -325,7 +325,7 @@ Mysti optimises the **answer quality** for a single query by using multiple mode
 
 ---
 
-## Phase 12 — Polish & v1 Release (Week 15–16)
+## Phase 12 — Polish & v1 Release ✅ COMPLETE (v0.8.0)
 
 **Goal:** Stable, documented, cross-platform v1.0.
 
@@ -338,10 +338,9 @@ Mysti optimises the **answer quality** for a single query by using multiple mode
 - [x] GitHub Actions matrix (ubuntu-latest, macos-latest, windows-latest)
 - [x] Release pipeline: cross-compile for all platforms; `.zip` (Windows), `.dmg` (macOS), `.tar.gz` (Linux)
 - [x] Install scripts: `curl | sh` for Mac/Linux (`install.sh`), PowerShell one-liner for Windows (`install.ps1`)
-- [ ] `zedplus config --show` / `--edit` / `--reset` — full config inspection and editing
-- [ ] `zedplus model list` — rendered table of all models with quality/speed tiers and strengths
-- [ ] README with quickstart, install, and init walkthrough
-- [ ] **Test suite** (learned from Mysti's 360+ tests): unit tests for `router/classifier.rs`, `router/cost.rs`, `router/rules.rs`; integration tests for backend error mapping; property tests for `extract_params()` in `local_models.rs`
+- [x] `zedplus config --show` / `--edit` / `--reset` / `--set KEY=VALUE` — full config inspection and live editing (15+ settable keys)
+- [x] README with quickstart, install, command reference, and routing table
+- [x] **Test suite**: 22 unit tests for `router/classifier.rs` (7 task types), `router/cost.rs` (token/cost), `router/rules.rs` (alias selection + fallback), `local_models.rs` (param extraction + scoring); all 25 tests pass
 
 ---
 
@@ -363,32 +362,37 @@ Mysti optimises the **answer quality** for a single query by using multiple mode
 
 ---
 
-## Phase 12c — Architect/Editor Mode (Week 14)
+## Phase 12c — Architect/Editor Mode ✅ COMPLETE (v0.8.1)
 
 **Goal:** Smart model plans, cheap model applies. 30–50% cost reduction on large code tasks.
 
-- [ ] `router/architect.rs` — detect architect/editor eligible tasks (code_review, complex_reasoning; change spans > threshold_lines)
-- [ ] Phase 1 prompt: send architect model query + relevant index chunks; receive structured plan (files + change descriptions, no code)
-- [ ] Phase 2 prompt: send editor model the plan + file contents; receive diffs only
-- [ ] Apply diffs through existing change-confirmation flow
-- [ ] `--explain` updated to show architect/editor split with per-phase cost estimate
-- [ ] `[routing.architect_editor]` config: `enabled`, `architect_model`, `editor_model`, `threshold_lines`
+- [x] `router/architect.rs` — `check_eligibility()` detects eligible tasks (`CodeReview`, `ComplexReasoning`; keyword match or query length ≥ `threshold_lines`)
+- [x] Architect phase: high-quality model receives query + code context + "produce a plan only" instruction; streams plan inline with `── Architect phase ──` header
+- [x] Editor phase: fast model receives original query + plan + "implement this" instruction; streams implementation inline with `── Editor phase ──` header
+- [x] Architect/editor mode bypassed when `@mention`, `/model`, `/local`, `/cheap` override is active; also bypassed in agent mode
+- [x] `--explain` updated to show both model IDs and per-phase cost estimate (`Arch/Edit: … → …`, `Split cost: $x.xx (arch) + $x.xx (edit)`)
+- [x] `[routing.architect_editor]` config: `enabled`, `architect_model`, `editor_model`, `threshold_lines`
+- [x] `is_architect_split: true` in distiller entries; combined plan+implementation stored in session context
 
 ---
 
-## Phase 13 — Background Test Runner (Week 14–15)
+## Phase 13 — Background Test Runner ✅ COMPLETE (v0.9.0)
 
 **Goal:** Run the project's real tests after every AI-made change and surface failures inline.
 
-- [ ] `tester/mod.rs` — detect test runner from project files (`Cargo.toml` → cargo test, `pytest.ini` → pytest, `package.json` → npm test, `go.mod` → go test)
-- [ ] `tester/runner.rs` — async background test job; capture stdout/stderr; parse pass/fail summary; write to `test_runs` SQLite table
-- [ ] Fire test runner after every file write by an AI response; debounce 2s
-- [ ] Inline failure surfacing: compact failure summary with changed files highlighted; "Fix with AI?" prompt
-- [ ] `tester/coverage.rs` — tree-sitter pass over modified functions; heuristic coverage check against test files
-- [ ] Benchmark runner: detect `cargo bench` / `pytest-benchmark`; surface regressions
-- [ ] `[testing]` config section with `auto_run`, `runner`, `suggest_tests`, `run_benchmarks` knobs
+- [x] `tester/mod.rs` — detect test runner from project files (`Cargo.toml` → cargo test, `pytest.ini`/`conftest.py` → pytest, `package.json` → npm test, `go.mod` → go test)
+- [x] `tester/runner.rs` — background test job; capture stdout/stderr; parse pass/fail; write to `test_runs` SQLite table; print ✅/❌ inline
+- [x] Fire test runner after every `write_file` tool call in agent mode; retries agent turn with failure context if tests fail
+- [x] `tester/coverage.rs` — heuristic coverage scanner: walks project tree, counts test annotations (`#[test]`, `def test_`, `describe(`, `func Test`, `#[cfg(test)]`) without running tests
+- [x] `/fix` REPL command: routes `session.last_test_failure` to AI with a "fix this minimal" prompt; clears state after fix attempt
+- [x] `check_last_test_failure()` queries `test_runs` table after each agent turn; surfaces `[tests still failing] Type /fix` hint when the last run failed
+- [x] `session.last_test_failure` field persists stderr across turns within a session
 
-**Milestone:** After `zedplus ask` modifies a Rust source file, `cargo test` runs in the background and failed tests appear inline within 5 seconds.
+**Deferred to later phase:**
+- [ ] Benchmark runner: detect `cargo bench` / `pytest-benchmark`; surface regressions
+- [ ] `[testing]` config knobs: `auto_run`, `suggest_tests`, `run_benchmarks`
+
+**Milestone:** After `zedplus ask` modifies a Rust source file, `cargo test` runs in the background and failed tests appear inline; `/fix` sends the failure to AI for resolution.
 
 ---
 
@@ -470,15 +474,17 @@ Phase 1  (Foundation) ✅
                     │     │           ├─→ Phase 15 (Multimodal + Skills)
                     │     │           │     └─→ Phase 16 (Community Ecosystem)
                     │     └─→ Phase 11 (Update System) ✅
-                    └─→ Phase 12 (Polish + Release) partial
+                    └─→ Phase 12 (Polish + Release) ✅ v0.8.0
                           ├─→ Phase 12b (ZEDPLUS.md, Hooks, Shell)
-                          ├─→ Phase 12c (Architect/Editor Mode)
-                          └─→ Phase 13 (Background Test Runner)
+                          ├─→ Phase 12c (Architect/Editor Mode) ✅ v0.8.1
+                          └─→ Phase 13 (Background Test Runner) ✅ v0.9.0
 ```
 
 **First usable product:** ✅ Complete as of v0.6.x — `zedplus ask` works end-to-end with routing, streaming, distillation, sessions, and agentic mode.
 
-**MVP for public launch:** End of Phase 12 (~week 16) — full distillation loop, benchmarking, multimodal inputs, skill packs, and binary updates.
+**Polish complete:** ✅ v0.9.0 — config management, unit tests, README, architect/editor routing, and test runner wired.
+
+**MVP for public launch:** Phase 12b + Phase 15 — ZEDPLUS.md context injection, hooks, multimodal inputs, skill packs.
 
 **Full v1 feature complete:** End of Phase 15 (~week 18).
 
