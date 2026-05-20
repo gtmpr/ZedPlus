@@ -220,6 +220,22 @@ pub fn is_indexable(path: &Path) -> bool {
     )
 }
 
+/// Files we never index: lockfiles, sourcemaps, minified bundles, and other
+/// machine-generated artifacts that are large and semantically useless for search.
+pub fn should_skip_file(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    matches!(
+        name,
+        "package-lock.json" | "yarn.lock" | "pnpm-lock.yaml"
+            | "npm-shrinkwrap.json" | "Cargo.lock" | "composer.lock"
+            | "Gemfile.lock" | "poetry.lock" | "go.sum" | "go.work.sum"
+            | "mix.lock" | "packages.lock.json" | "paket.lock"
+    ) || name.ends_with(".min.js")
+      || name.ends_with(".min.css")
+      || name.ends_with(".map")
+      || name.ends_with(".bundle.js")
+}
+
 /// Directories we always skip.
 pub fn should_skip_dir(name: &str) -> bool {
     matches!(

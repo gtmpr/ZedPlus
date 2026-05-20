@@ -7,7 +7,7 @@ pub mod watcher;
 use crate::platform;
 use anyhow::Result;
 use embedder::Embedder;
-use parser::{is_indexable, should_skip_dir};
+use parser::{is_indexable, should_skip_dir, should_skip_file};
 use std::path::{Path, PathBuf};
 use store::{content_hash, IndexStore};
 
@@ -115,6 +115,8 @@ async fn index_directory(
     Ok(count)
 }
 
+const MAX_FILE_BYTES: u64 = 200_000; // 200 KB
+
 /// Index a single file. Returns Ok(true) if the file was (re)indexed, Ok(false) if unchanged.
 async fn index_file(
     path: &Path,
@@ -122,6 +124,12 @@ async fn index_file(
     embedder: &Embedder,
     embed_available: bool,
 ) -> Result<bool> {
+    if should_skip_file(path) {
+        return Ok(false);
+    }
+    if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_FILE_BYTES {
+        return Ok(false);
+    }
     let content_bytes = std::fs::read(path)?;
     let hash = content_hash(&content_bytes);
     let path_str = path.to_string_lossy();
