@@ -8,6 +8,30 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.7.2] - 2026-05-20
+
+### Added
+- **Codex routing**: `codex-mini` (→ `codex-mini-latest`) and `gpt-4-1` (→ `gpt-4.1`) added to `models.toml` with code-focused strengths. `gpt-4.1` is quality_tier 5 with a 1M-token context window.
+- **`@codex` @-mention**: routes to OpenAI with `codex-mini-latest`; auto-completes in the REPL dropdown when Codex CLI is detected.
+- **Codex CLI detection**: `detect_cli_tools()` now probes for the `codex` binary; announces at REPL startup when found.
+- **Codex in failover chain**: `codex-mini` tried before `gpt-4o-mini` when OpenAI is a configured fallback provider.
+- **`/ui` command**: `/ui` shows the active UI style; `/ui native|claude|gemini` changes it and persists to `~/.config/zedplus/config.toml` immediately.
+- **First-run UI preference prompt**: on the very first launch (no config file yet), if Claude CLI or Gemini CLI is detected the REPL prompts the user to pick a preferred UI style before entering the main loop.
+
+### Fixed
+- **Ollama model-not-found error**: the 404 error message now includes the actual model name (`ollama pull gemma4:27b`) instead of the placeholder `ollama pull <model>`.
+- **`@local/<name>` not-found feedback**: when a specific local model ID isn't in the discovered list, ZedPlus now prints the full discovered list and highlights close name matches (e.g. `did you mean: gemma4:27b?`) before falling back to Ollama directly.
+- **Routing no longer defaults to Claude when alias is absent**: `select_alias()` now falls back to the best available model for the task type (by quality_tier + strengths match) when the configured alias isn't in the model registry. Eliminates implicit Claude bias for users who only have Gemini or OpenAI configured.
+
+### Costs added
+- `codex-mini-latest`: $1.50 / $6.00 per MTok (input/output)
+- `gpt-4.1`: $2.00 / $8.00 per MTok (input/output)
+
+### Version bump
+`0.7.0` → `0.7.2`
+
+---
+
 ## [0.7.0] - 2026-05-20
 
 ### Added

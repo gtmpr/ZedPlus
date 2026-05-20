@@ -273,9 +273,10 @@ Mysti optimises the **answer quality** for a single query by using multiple mode
 - [x] `@local` virtual mention: resolve to `flags.local = true`
 - [x] `@claude` / `@gemini` prefer CLI subscriptions when available, fall back to API
 - [x] `/help` updated with @-mention documentation
-
-**Pending / future:**
 - [x] Multiple `@provider` mentions: split query at mention boundaries, route segments independently
+- [x] `@openai` mention support
+- [x] `@codex` mention: routes to OpenAI with `codex-mini-latest`; auto-completes in REPL dropdown
+- [x] `@groq`, `@qwen` mention support
 
 ---
 
@@ -328,14 +329,17 @@ Mysti optimises the **answer quality** for a single query by using multiple mode
 
 **Goal:** Stable, documented, cross-platform v1.0.
 
-- [ ] Error messages: every user-facing error has a clear message + remediation hint (no raw panics)
-- [x] Rate limit graceful degradation: `RateLimitError` triggers fallback chain with user notification
-- [ ] `zedplus config --show` / `--edit` / `--reset` — full config inspection and editing
-- [ ] `zedplus model list` — rendered table of all models with quality/speed tiers and strengths
+- [x] Error messages: Ollama 404 now includes actual model name + "did you mean" suggestions; `@local/<name>` shows discovered model list on mismatch
+- [x] Rate limit graceful degradation: `RateLimitError` triggers fallback chain with user notification; Codex added to failover chain
+- [x] `/ui [native|claude|gemini]` — show/change UI style, persisted to config immediately
+- [x] First-run UI preference prompt — detects installed CLIs, asks preference before first REPL loop
+- [x] Adaptive routing fix — `select_alias()` no longer defaults to Claude when the configured alias is absent from registry; picks best available model by task strengths
+- [x] Bundled `costs.toml` and `models.toml` with current model set (Codex, GPT-4.1, Gemini 2.5, Claude Opus 4.7)
 - [x] GitHub Actions matrix (ubuntu-latest, macos-latest, windows-latest)
 - [x] Release pipeline: cross-compile for all platforms; `.zip` (Windows), `.dmg` (macOS), `.tar.gz` (Linux)
 - [x] Install scripts: `curl | sh` for Mac/Linux (`install.sh`), PowerShell one-liner for Windows (`install.ps1`)
-- [x] Bundled `costs.toml` and `models.toml` with current model set
+- [ ] `zedplus config --show` / `--edit` / `--reset` — full config inspection and editing
+- [ ] `zedplus model list` — rendered table of all models with quality/speed tiers and strengths
 - [ ] README with quickstart, install, and init walkthrough
 - [ ] **Test suite** (learned from Mysti's 360+ tests): unit tests for `router/classifier.rs`, `router/cost.rs`, `router/rules.rs`; integration tests for backend error mapping; property tests for `extract_params()` in `local_models.rs`
 
