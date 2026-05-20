@@ -165,11 +165,22 @@ pub struct PrivacyConfig {
     pub clipboard_detection: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum UiStyle {
+    #[default]
+    Native,
+    ClaudeCode,
+    GeminiCli,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BehaviorConfig {
     pub default_scope: Scope,
     pub stream: bool,
     pub cost_nudge_threshold_usd: f64,
+    #[serde(default)]
+    pub ui_style: UiStyle,
 }
 
 impl Default for BehaviorConfig {
@@ -178,6 +189,7 @@ impl Default for BehaviorConfig {
             default_scope: Scope::Narrow,
             stream: true,
             cost_nudge_threshold_usd: 0.50,
+            ui_style: UiStyle::Native,
         }
     }
 }
@@ -322,6 +334,12 @@ pub struct ServicesConfig {
     pub lmstudio: bool,
     pub lmstudio_url: Option<String>,
     pub use_cases: Vec<String>,
+    #[serde(default)]
+    pub groq: bool,
+    #[serde(default)]
+    pub openai_cli: bool,
+    #[serde(default)]
+    pub qwen: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -412,6 +430,9 @@ pub struct BrainstormConfig {
     pub convergence_threshold: f64,
     /// Max rounds for Delphi strategy
     pub max_delphi_rounds: u32,
+    /// Auto-trigger debate for ComplexReasoning tasks above this token threshold (0 = disabled)
+    #[serde(default)]
+    pub auto_debate_threshold_tokens: u32,
 }
 
 impl Default for BrainstormConfig {
@@ -420,6 +441,7 @@ impl Default for BrainstormConfig {
             default_strategy: "debate".to_string(),
             convergence_threshold: 0.62,
             max_delphi_rounds: 3,
+            auto_debate_threshold_tokens: 0,
         }
     }
 }

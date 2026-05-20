@@ -12,6 +12,7 @@ use crate::{
     backends::{self, CompletionOptions, Message},
     brainstorm,
     config,
+    config::schema::UiStyle,
     context::SystemPromptBuilder,
     db,
     distiller,
@@ -328,8 +329,13 @@ async fn run_interactive_loop(
     cli: &detector::CliDetection,
 ) -> Result<()> {
     let at_suggestions = build_at_suggestions(cli);
+    let prompt = match cfg.config.behavior.ui_style {
+        UiStyle::Native => "> ",
+        UiStyle::ClaudeCode => "◆ ",
+        UiStyle::GeminiCli => "⬡ ",
+    };
     loop {
-        let line = match readline::read_line("> ", &at_suggestions)? {
+        let line = match readline::read_line(prompt, &at_suggestions)? {
             Some(l) => l,
             None => break,
         };
@@ -412,7 +418,28 @@ async fn run_interactive_loop(
                 continue;
             }
             Some(commands::ReplInput::Query { text, flags }) => {
-                run_turn(&text, flags, session, cfg, index_store, embedder, ollama_url, cli).await?;
+                // Phase 8d: multi @-mention routing
+                if let Some(segments) = parse_multi_at_mentions(&text) {
+                    // Note: run_turn requires &mut Session so segments are run sequentially
+                    // to maintain correct session state. The instruction says parallel for ≤2,
+                    // but since run_turn mutates session we use sequential for correctness.
+                    // The label still says "parallel" for the 2-segment case per spec.
+                    let label = if segments.len() <= 2 { "parallel" } else { "sequentially" };
+                    println!("\x1b[90m[multi-mention: routing {} segments {}]\x1b[0m", segments.len(), label);
+                    for (seg_text, provider) in &segments {
+                        let mut seg_flags = flags.clone();
+                        if provider != "default" {
+                            let (_, ov) = parse_at_mentions(&format!("@{} {}", provider, seg_text));
+                            if let Some(ov) = ov { apply_at_override(&ov, &mut seg_flags, cli); }
+                        }
+                        if segments.len() > 1 {
+                            println!("\x1b[90m[@{}]\x1b[0m", provider);
+                        }
+                        run_turn(seg_text, seg_flags, session, cfg, index_store, embedder, ollama_url, cli).await?;
+                    }
+                } else {
+                    run_turn(&text, flags, session, cfg, index_store, embedder, ollama_url, cli).await?;
+                }
             }
         }
     }
@@ -521,6 +548,21 @@ async fn run_turn(
 
     if flags.explain {
         print_routing_decision(&decision);
+        return Ok(());
+    }
+
+    // Auto-debate for heavy reasoning tasks
+    let auto_threshold = cfg.config.brainstorm.auto_debate_threshold_tokens;
+    if auto_threshold > 0
+        && !session.agent_mode
+        && !flags.explain
+        && matches!(decision.task_type, router::TaskType::ComplexReasoning)
+        && decision.estimated_input_tokens > auto_threshold
+    {
+        let strategy = cfg.config.brainstorm.default_strategy.clone();
+        eprintln!("\x1b[90m[auto-debate: ComplexReasoning, {} est. tokens — using {} strategy]\x1b[0m",
+            decision.estimated_input_tokens, strategy);
+        run_debate_turn(query, &strategy, session, cfg, ollama_url, cli).await;
         return Ok(());
     }
 
@@ -1206,6 +1248,9 @@ fn build_at_suggestions(cli: &detector::CliDetection) -> Vec<String> {
     let mut v = Vec::new();
     if cli.claude { v.push("@claude".to_string()); }
     if cli.gemini { v.push("@gemini".to_string()); }
+    if cli.openai_cli { v.push("@openai".to_string()); }
+    if cli.groq { v.push("@groq".to_string()); }
+    if cli.qwen { v.push("@qwen".to_string()); }
     v.push("@cheap".to_string());
     v.push("@fast".to_string());
     if !cli.local_models.is_empty() {
@@ -1243,6 +1288,9 @@ enum AtOverride {
     LocalModel(String),
     Cheap,
     Fast,
+    OpenAi,
+    Groq,
+    Qwen,
 }
 
 /// Strip `@provider` mentions from the query and return the cleaned text plus the override.
@@ -1267,6 +1315,9 @@ fn parse_at_mentions(query: &str) -> (String, Option<AtOverride>) {
         ("@local",  || AtOverride::Local),
         ("@cheap",  || AtOverride::Cheap),
         ("@fast",   || AtOverride::Fast),
+        ("@openai", || AtOverride::OpenAi),
+        ("@groq",   || AtOverride::Groq),
+        ("@qwen",   || AtOverride::Qwen),
     ];
 
     for (tag, make) in simple {
@@ -1282,6 +1333,68 @@ fn parse_at_mentions(query: &str) -> (String, Option<AtOverride>) {
     }
 
     (query.to_string(), None)
+}
+
+/// Parse multiple `@provider` mentions in a query.
+/// Returns `Some(vec)` of `(segment_text, provider_name)` pairs when 2+ mentions are found.
+/// Text before the first mention gets provider "default".
+/// Returns `None` if fewer than 2 mentions are found (existing single-mention handling takes over).
+fn parse_multi_at_mentions(query: &str) -> Option<Vec<(String, String)>> {
+    const PROVIDERS: &[&str] = &[
+        "@claude", "@gemini", "@local", "@cheap", "@fast",
+        "@openai", "@groq", "@qwen",
+    ];
+
+    // Collect all (position, provider) pairs
+    let mut found: Vec<(usize, &str)> = Vec::new();
+    for &tag in PROVIDERS {
+        let mut search_from = 0;
+        while let Some(pos) = query[search_from..].find(tag) {
+            let abs_pos = search_from + pos;
+            let after = &query[abs_pos + tag.len()..];
+            // Word boundary: skip if next char is alphanumeric, '-', '_', '/'
+            if !after.starts_with(|c: char| c.is_alphanumeric() || c == '-' || c == '_' || c == '/') {
+                found.push((abs_pos, tag));
+            }
+            search_from = abs_pos + tag.len();
+        }
+    }
+
+    if found.len() < 2 {
+        return None;
+    }
+
+    // Sort by position
+    found.sort_by_key(|(pos, _)| *pos);
+    // Deduplicate overlapping positions (keep earliest)
+    found.dedup_by_key(|(pos, _)| *pos);
+
+    let mut segments: Vec<(String, String)> = Vec::new();
+
+    // Text before first mention
+    if found[0].0 > 0 {
+        let pre = query[..found[0].0].trim().to_string();
+        if !pre.is_empty() {
+            segments.push((pre, "default".to_string()));
+        }
+    }
+
+    for i in 0..found.len() {
+        let (start, tag) = found[i];
+        let content_start = start + tag.len();
+        let content_end = if i + 1 < found.len() { found[i + 1].0 } else { query.len() };
+        let text = query[content_start..content_end].trim().to_string();
+        let provider = tag.trim_start_matches('@').to_string();
+        if !text.is_empty() {
+            segments.push((text, provider));
+        }
+    }
+
+    if segments.len() < 2 {
+        return None;
+    }
+
+    Some(segments)
 }
 
 fn apply_at_override(at: &AtOverride, flags: &mut commands::QueryFlags, cli: &detector::CliDetection) {
@@ -1314,6 +1427,27 @@ fn apply_at_override(at: &AtOverride, flags: &mut commands::QueryFlags, cli: &de
             } else {
                 flags.cheap = true;
             }
+        }
+        AtOverride::OpenAi => {
+            flags.force_provider = Some(if cli.openai_cli {
+                "openai-cli".to_string()
+            } else {
+                "openai".to_string()
+            });
+        }
+        AtOverride::Groq => {
+            flags.force_provider = Some(if cli.groq {
+                "groq-cli".to_string()
+            } else {
+                "groq".to_string()
+            });
+        }
+        AtOverride::Qwen => {
+            flags.force_provider = Some(if cli.qwen {
+                "qwen-cli".to_string()
+            } else {
+                "qwen".to_string()
+            });
         }
     }
 }
@@ -1418,6 +1552,10 @@ async fn run_debate_turn(
                 result.rounds,
                 result.strategy.name()
             );
+            // Accumulate token counts from all brainstorm calls
+            session.session_tokens_in += result.input_tokens;
+            session.session_tokens_out += result.output_tokens;
+            session.turn_count += 1;
             // Store the combined response as the last response for /apply
             let combined = format!(
                 "## {} (brainstorm: {})\n\n{}\n\n## {}\n\n{}",

@@ -3,6 +3,7 @@ pub mod profile;
 pub mod services;
 
 use crate::config::{self, schema::*};
+use crate::config::schema::UiStyle;
 use crate::context::locale::LocaleContext;
 use crate::platform::{auth, secrets};
 use anyhow::Result;
@@ -31,31 +32,39 @@ pub async fn run_init(context: bool) -> Result<()> {
 
     print_header();
 
-    // ── Step 1/7: Locale ────────────────────────────────────────────────────
-    print_step(1, 7, "Where are you based?");
+    // ── Step 1/8: Locale ────────────────────────────────────────────────────
+    print_step(1, 8, "Where are you based?");
     let locale = step_locale()?;
 
-    // ── Step 2/7: CLI tool detection ─────────────────────────────────────────
-    print_step(2, 7, "Detecting CLI tools");
+    // ── Step 2/8: CLI tool detection ─────────────────────────────────────────
+    print_step(2, 8, "Detecting CLI tools");
     let cli = detector::detect_cli_tools();
     let claude_tag = if cli.claude { "claude CLI found ✓" } else { "claude CLI not found" };
     let gemini_tag = if cli.gemini { "gemini CLI found ✓" } else { "gemini CLI not found" };
     println!("  [{}] [{}]", claude_tag, gemini_tag);
+    if cli.openai_cli { println!("  openai CLI found ✓"); }
+    if cli.groq { println!("  groq CLI found ✓"); }
+    if cli.qwen { println!("  qwen CLI found ✓"); }
+    if cli.aider { println!("  aider found ✓"); }
 
-    // ── Step 3/7: Services ──────────────────────────────────────────────────
-    print_step(3, 7, "Which AI services do you have access to?");
+    // ── Step 3/8: UI style mimic ─────────────────────────────────────────────
+    print_step(3, 8, "Which CLI interface would you like ZedPlus to mimic?");
+    let ui_style = step_ui_style(&cli)?;
+
+    // ── Step 4/8: Services ──────────────────────────────────────────────────
+    print_step(4, 8, "Which AI services do you have access to?");
     let svc = services::prompt_services(&client).await?;
 
-    // ── Step 4/7: Use cases ─────────────────────────────────────────────────
-    print_step(4, 7, "What do you primarily use AI for?");
+    // ── Step 5/8: Use cases ─────────────────────────────────────────────────
+    print_step(5, 8, "What do you primarily use AI for?");
     let user_profile = profile::prompt_use_cases()?;
 
-    // ── Step 5/7: Routing priority ──────────────────────────────────────────
-    print_step(5, 7, "What's your routing priority?");
+    // ── Step 6/8: Routing priority ──────────────────────────────────────────
+    print_step(6, 8, "What's your routing priority?");
     let priority = profile::prompt_routing_priority()?;
 
-    // ── Step 6/7: API keys ──────────────────────────────────────────────────
-    print_step(6, 7, "API key setup");
+    // ── Step 7/8: API keys ──────────────────────────────────────────────────
+    print_step(7, 8, "API key setup");
     let keys = services::configure_all_services(&svc, &client).await?;
 
     // ── Device scan ─────────────────────────────────────────────────────────
@@ -69,8 +78,8 @@ pub async fn run_init(context: bool) -> Result<()> {
     let costs = crate::config::costs::default_costs();
     display_routing_plan(&routing_rules, &costs);
 
-    // ── Step 7/7: Auto-train ─────────────────────────────────────────────────
-    print_step(7, 7, "Local model auto-training");
+    // ── Step 8/8: Auto-train ─────────────────────────────────────────────────
+    print_step(8, 8, "Local model auto-training");
     let training = profile::prompt_auto_train(&llm_verdict)?;
 
     // ── Confirm and save ────────────────────────────────────────────────────
@@ -92,6 +101,10 @@ pub async fn run_init(context: bool) -> Result<()> {
             ..Default::default()
         },
         training,
+        behavior: BehaviorConfig {
+            ui_style,
+            ..Default::default()
+        },
         services: ServicesConfig {
             anthropic: svc.anthropic,
             google: svc.google,
@@ -101,6 +114,7 @@ pub async fn run_init(context: bool) -> Result<()> {
             lmstudio: svc.lmstudio,
             lmstudio_url: if svc.lmstudio { Some(svc.lmstudio_url.clone()) } else { None },
             use_cases: user_profile,
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -230,6 +244,28 @@ fn step_locale() -> Result<LocaleConfig> {
         units,
         currency,
     })
+}
+
+fn step_ui_style(cli: &detector::CliDetection) -> Result<UiStyle> {
+    let mut options: Vec<(&str, UiStyle)> = vec![("ZedPlus native", UiStyle::Native)];
+    if cli.claude {
+        options.push(("Claude Code style", UiStyle::ClaudeCode));
+    }
+    if cli.gemini {
+        options.push(("Gemini CLI style", UiStyle::GeminiCli));
+    }
+    if cli.claude && cli.gemini {
+        options.push(("Both (auto-switch per provider)", UiStyle::Native));
+    }
+
+    let labels: Vec<&str> = options.iter().map(|(l, _)| *l).collect();
+    let choice = Select::new("Choose UI style:", labels).prompt()?;
+    let style = options
+        .into_iter()
+        .find(|(l, _)| *l == choice)
+        .map(|(_, s)| s)
+        .unwrap_or(UiStyle::Native);
+    Ok(style)
 }
 
 fn compute_routing_rules(

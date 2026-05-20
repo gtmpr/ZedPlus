@@ -48,6 +48,8 @@ pub struct BrainstormResult {
     pub synthesis: Option<String>,
     pub rounds: u32,
     pub converged: bool,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
 }
 
 const CONVERGENCE_THRESHOLD: f64 = 0.62;
@@ -88,6 +90,7 @@ pub async fn run(
     run_perspectives(query, system, history, backend_a, backend_b).await
 }
 
+
 pub async fn run_strategy(
     query: &str,
     system: Option<&str>,
@@ -121,6 +124,9 @@ async fn run_perspectives(
     let ra = ra.map_err(|e| anyhow::anyhow!("{e}"))?;
     let rb = rb.map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    let input_tokens = ra.input_tokens + rb.input_tokens;
+    let output_tokens = ra.output_tokens + rb.output_tokens;
+
     let sim = jaccard(&ra.content, &rb.content);
     let converged = sim >= CONVERGENCE_THRESHOLD;
 
@@ -133,6 +139,8 @@ async fn run_perspectives(
         synthesis: if converged { Some("[Models converged on the same core answer.]".to_string()) } else { None },
         rounds: 1,
         converged,
+        input_tokens,
+        output_tokens,
     })
 }
 
@@ -165,6 +173,9 @@ async fn run_debate(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    let input_tokens = ra.input_tokens + rb.input_tokens;
+    let output_tokens = ra.output_tokens + rb.output_tokens;
+
     Ok(BrainstormResult {
         strategy: Strategy::Debate,
         label_a: format!("{} (proposal)", backend_a.name()),
@@ -174,6 +185,8 @@ async fn run_debate(
         synthesis: None,
         rounds: 1,
         converged: false,
+        input_tokens,
+        output_tokens,
     })
 }
 
@@ -206,6 +219,9 @@ async fn run_red_team(
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
 
+    let input_tokens = ra.input_tokens + rb.input_tokens;
+    let output_tokens = ra.output_tokens + rb.output_tokens;
+
     Ok(BrainstormResult {
         strategy: Strategy::RedTeam,
         label_a: format!("{} (proposal)", backend_a.name()),
@@ -215,6 +231,8 @@ async fn run_red_team(
         synthesis: None,
         rounds: 1,
         converged: false,
+        input_tokens,
+        output_tokens,
     })
 }
 
@@ -227,6 +245,8 @@ async fn run_delphi(
 ) -> Result<BrainstormResult> {
     let mut rounds = 0u32;
     let mut converged = false;
+    let mut total_input_tokens: u32 = 0;
+    let mut total_output_tokens: u32 = 0;
 
     eprintln!("\x1b[90m[brainstorm] delphi — round 1 (independent)…\x1b[0m");
 
@@ -234,8 +254,12 @@ async fn run_delphi(
         backend_a.complete(opts_with_prompt(system, history, query)),
         backend_b.complete(opts_with_prompt(system, history, query)),
     );
-    let mut ra_text = ra.map_err(|e| anyhow::anyhow!("{e}"))?.content;
-    let mut rb_text = rb.map_err(|e| anyhow::anyhow!("{e}"))?.content;
+    let ra = ra.map_err(|e| anyhow::anyhow!("{e}"))?;
+    let rb = rb.map_err(|e| anyhow::anyhow!("{e}"))?;
+    total_input_tokens += ra.input_tokens + rb.input_tokens;
+    total_output_tokens += ra.output_tokens + rb.output_tokens;
+    let mut ra_text = ra.content;
+    let mut rb_text = rb.content;
     rounds += 1;
 
     while rounds < MAX_DELPHI_ROUNDS {
@@ -267,8 +291,12 @@ async fn run_delphi(
             backend_a.complete(opts_with_prompt(system, &[], &refine_a)),
             backend_b.complete(opts_with_prompt(system, &[], &refine_b)),
         );
-        ra_text = na.map_err(|e| anyhow::anyhow!("{e}"))?.content;
-        rb_text = nb.map_err(|e| anyhow::anyhow!("{e}"))?.content;
+        let na = na.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let nb = nb.map_err(|e| anyhow::anyhow!("{e}"))?;
+        total_input_tokens += na.input_tokens + nb.input_tokens;
+        total_output_tokens += na.output_tokens + nb.output_tokens;
+        ra_text = na.content;
+        rb_text = nb.content;
         rounds += 1;
     }
 
@@ -295,5 +323,7 @@ async fn run_delphi(
         synthesis,
         rounds,
         converged,
+        input_tokens: total_input_tokens,
+        output_tokens: total_output_tokens,
     })
 }

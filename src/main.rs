@@ -1322,61 +1322,79 @@ async fn cmd_bench(args: cli::BenchArgs) -> Result<()> {
     Ok(())
 }
 
-// ── Phase 12: zedplus update ──────────────────────────────────────────────────
+// ── Phase 11: zedplus update ──────────────────────────────────────────────────
 
 async fn cmd_update(args: cli::UpdateArgs) -> Result<()> {
+    use platform::update;
+    use std::io::Write as _;
+
     const CURRENT: &str = env!("CARGO_PKG_VERSION");
-    const RELEASES_URL: &str =
-        "https://api.github.com/repos/your-org/zedplus/releases/latest";
 
     print!("Checking for updates (current: v{CURRENT})...");
-    use std::io::Write as _;
     std::io::stdout().flush()?;
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(8))
+        .timeout(std::time::Duration::from_secs(15))
         .user_agent("zedplus-updater")
         .build()?;
 
-    let resp = client.get(RELEASES_URL).send().await;
+    let release = match update::fetch_latest(&client).await {
+        Ok(r) => r,
+        Err(e) => {
+            println!(" offline or unreachable ({e}).");
+            println!("  Current version: v{CURRENT}");
+            return Ok(());
+        }
+    };
 
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let data: serde_json::Value = r.json().await.unwrap_or_default();
-            let latest = data["tag_name"]
-                .as_str()
-                .unwrap_or("")
-                .trim_start_matches('v');
-            if latest.is_empty() {
-                println!(" unable to parse release tag.");
-            } else if latest == CURRENT {
-                println!(" v{CURRENT} is up to date.");
-            } else {
-                println!(" v{latest} available!");
-                println!();
-                println!("  To update, run from the ZedPlus source directory:");
-                println!("    .\\install.ps1 patch");
-                println!();
-                println!("  Or pull the latest source first:");
-                println!("    git pull && .\\install.ps1 patch");
-            }
-        }
-        Ok(r) if r.status().as_u16() == 404 => {
-            println!(" no releases found (repo may be private or releases not published).");
-            println!("  Current version: v{CURRENT}");
-        }
-        Ok(r) => {
-            println!(" HTTP {} — could not reach releases.", r.status());
-        }
-        Err(_) => {
-            println!(" offline or unreachable.");
-            println!("  Current version: v{CURRENT}");
-        }
+    if release.version.is_empty() {
+        println!(" unable to parse release tag.");
+        return Ok(());
     }
 
-    if !args.check {
+    if release.version == CURRENT {
+        println!(" v{CURRENT} is up to date.");
+        return Ok(());
+    }
+
+    println!(" v{} available!", release.version);
+
+    if args.check {
         println!();
-        println!("Tip: use `zedplus update --check` to check without installing.");
+        println!("  Run `zedplus update` to download and install.");
+        return Ok(());
+    }
+
+    // Confirm before updating
+    println!();
+    print!("  Install v{}? [y/N] ", release.version);
+    std::io::stdout().flush()?;
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    if !input.trim().eq_ignore_ascii_case("y") {
+        println!("  Aborted.");
+        return Ok(());
+    }
+
+    match update::perform_update(&client, &release).await {
+        Ok(installed) => {
+            println!("  Update installed to: {}", installed.display());
+            #[cfg(windows)]
+            {
+                println!();
+                println!("  On Windows the running binary cannot be replaced while it is running.");
+                println!("  The new binary has been staged as:");
+                println!("    {}", installed.display());
+                println!();
+                println!("  To complete the update, close this terminal and run:");
+                println!("    Move-Item -Force zedplus_new.exe zedplus.exe");
+                println!("  (or re-run the installer: .\\install.ps1)");
+            }
+        }
+        Err(e) => {
+            eprintln!("  Update failed: {e}");
+            eprintln!("  You can update manually from: https://github.com/{}/releases", update::REPO);
+        }
     }
 
     Ok(())

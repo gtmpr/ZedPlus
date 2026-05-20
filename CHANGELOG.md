@@ -8,6 +8,27 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.7.0] - 2026-05-20
+
+### Added
+- **Phase 8 complete — Adaptive Routing**: `zedplus profile --optimize` and `--apply` now fully implement suggestion logic (≥5 consistent overrides per task type triggers a routing change suggestion written to `.zedplus.toml`).
+- **Phase 8c — Brainstorm token accounting**: All four brainstorm strategies (`debate`, `red-team`, `perspectives`, `delphi`) now accumulate `input_tokens` / `output_tokens` across every `complete()` call and add them to session totals. Delphi sums across all refinement rounds.
+- **Phase 8c — Auto-debate trigger**: New `[brainstorm] auto_debate_threshold_tokens` config field (default 0 = disabled). When set, `ComplexReasoning` queries whose estimated token count exceeds the threshold automatically trigger the configured brainstorm strategy instead of a single-model response.
+- **Phase 8d — Multiple @mention routing**: Queries with 2+ `@provider` mentions (e.g. `@claude explain X @gemini summarize Y`) are now split at mention boundaries and each segment is routed to the specified provider independently, with per-segment labels printed to the terminal.
+- **Phase 11 — Self-update system**: `platform/update.rs` implements full self-update: GitHub Releases API check, platform-specific asset matching (Windows zip, macOS tar.gz/dmg, Linux tar.gz), download with progress bar, binary extraction and install. `zedplus update --check` prints version comparison; `zedplus update` prompts for confirmation then installs. Windows stages as `zedplus_new.exe` with instructions since the running exe cannot be replaced in place.
+- **UI style mimic**: New `[behavior] ui_style` config field (`native` / `claudecode` / `geminicli`). The REPL prompt changes to `◆ ` (Claude Code) or `⬡ ` (Gemini CLI) based on config. The `zedplus init` wizard now asks which CLI to mimic (step 3/8, shown dynamically based on detected CLIs).
+- **Expanded CLI detection**: `detect_cli_tools()` now probes for `openai`, `groq`, `qwen`, and `aider` binaries alongside `claude` and `gemini`. Detected tools are printed in `zedplus init` step 2.
+- **New service config fields**: `[services]` block gains `groq`, `openai_cli`, `qwen` boolean fields.
+- **macOS tar.gz release artifacts**: Both macOS CI jobs now produce `.tar.gz` archives (in addition to `.dmg`) for use by the self-updater. Artifacts and release uploads updated accordingly.
+- **Version bump**: `0.6.8` → `0.7.0`.
+
+### Dependencies added
+- `zip = { version = "0.6", default-features = false, features = ["deflate"] }`
+- `flate2 = "1"`
+- `tar = "0.4"`
+
+---
+
 ## [0.1.1] - 2026-05-17
 
 ### Fixed

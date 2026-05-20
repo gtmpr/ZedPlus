@@ -109,6 +109,14 @@ pub struct CliDetection {
     /// Models discovered from live local inference services (Ollama, LM Studio).
     /// Populated asynchronously after startup; empty until discovery runs.
     pub local_models: Vec<crate::local_models::DiscoveredModel>,
+    pub openai_cli: bool,
+    pub openai_bin: String,
+    pub groq: bool,
+    pub groq_bin: String,
+    pub qwen: bool,
+    pub qwen_bin: String,
+    pub aider: bool,
+    pub aider_bin: String,
 }
 
 impl Default for CliDetection {
@@ -121,6 +129,14 @@ impl Default for CliDetection {
             ollama_url: "http://localhost:11434".into(),
             lmstudio_url: "http://localhost:1234".into(),
             local_models: Vec::new(),
+            openai_cli: false,
+            openai_bin: String::new(),
+            groq: false,
+            groq_bin: String::new(),
+            qwen: false,
+            qwen_bin: String::new(),
+            aider: false,
+            aider_bin: String::new(),
         }
     }
 }
@@ -140,11 +156,39 @@ pub fn detect_cli_tools() -> CliDetection {
         (false, "gemini".to_string())
     };
 
+    let (openai_cli, openai_bin) = if probe_bin("openai") {
+        (true, "openai".to_string())
+    } else {
+        (false, String::new())
+    };
+
+    let (groq, groq_bin) = if probe_bin("groq") {
+        (true, "groq".to_string())
+    } else {
+        (false, String::new())
+    };
+
+    let (qwen, qwen_bin) = if probe_bin("qwen") {
+        (true, "qwen".to_string())
+    } else {
+        (false, String::new())
+    };
+
+    let (aider, aider_bin) = if probe_bin("aider") {
+        (true, "aider".to_string())
+    } else {
+        (false, String::new())
+    };
+
     CliDetection {
         claude, gemini, claude_bin, gemini_bin,
         ollama_url: "http://localhost:11434".into(),
         lmstudio_url: "http://localhost:1234".into(),
         local_models: Vec::new(),
+        openai_cli, openai_bin,
+        groq, groq_bin,
+        qwen, qwen_bin,
+        aider, aider_bin,
     }
 }
 

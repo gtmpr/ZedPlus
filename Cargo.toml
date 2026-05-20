@@ -1,6 +1,6 @@
 [package]
 name = "zedplus"
-version = "0.6.8"
+version = "0.7.0"
 edition = "2021"
 description = "Smart AI routing CLI with realtime code indexing and response distillation"
 license = "MIT"
@@ -65,6 +65,10 @@ anyhow = "1"
 thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+flate2 = "1"
+tar = "0.4"
 
 [profile.release]
 opt-level = 3
