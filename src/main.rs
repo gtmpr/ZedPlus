@@ -165,6 +165,11 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
         }
     }
 
+    // Load cached quota state (one-shot ask: no CLI probe, just cached data).
+    let mut quota = platform::quota::QuotaCache::load();
+    quota.expire_stale_caps();
+    let _ = quota.refresh_gemini(cfg.config.quotas.gemini_daily_tokens);
+
     let decision = router::route(
         &args.query,
         &cfg.config,
@@ -173,6 +178,7 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
         args.model.as_deref(),
         args.local,
         args.cheap,
+        Some(&quota),
     );
 
     // Privacy gate

@@ -8,6 +8,27 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.13.0] - 2026-05-20
+
+### Added
+- **Proactive quota-aware routing** (`src/platform/quota.rs`): ZedPlus now tracks provider quota pressure in real time and shifts traffic away from loaded providers *before* hitting a 429. Key components:
+  - `QuotaCache` struct persisted to `~/.config/zedplus/quota_cache.json`. Tracks `tokens_remaining`, `tokens_limit`, `reset_at` (from Claude API headers), `cli_capped` / `cli_cap_reset_at` (for CLI subscriptions), and today's Gemini token estimate (derived from the local `usage` DB).
+  - `QuotaCache::pressure(provider) -> f32` returns 0.0–1.0: 0 = free, 0.5 = half used, 1.0 = exhausted.
+  - Pressure thresholds: <50% normal; 50–79% reroute lightweight tasks (docs/quick/search/fallback); 80–94% reroute everything except CodeReview/ComplexReasoning; ≥95% always reroute.
+- **Claude API header harvesting** (`src/backends/claude.rs`): every successful response (streaming and non-streaming) reads `anthropic-ratelimit-tokens-remaining`, `anthropic-ratelimit-tokens-limit`, `anthropic-ratelimit-tokens-reset` headers and writes them to the quota cache — no extra requests needed.
+- **CLI subscription quota cascade** (`src/repl/mod.rs`): when both `claude` CLI and `gemini` CLI are installed, ZedPlus now picks the lower-pressure subscription. A CLI at ≥95% pressure is skipped; if both are exhausted the system falls back to API keys. A brief log line is printed when pressure is notable (`[claude-cli: 74% quota — preferred over gemini (82%)]`).
+- **Quota cache refresh at session start** (`src/repl/mod.rs`): expired caps are cleared, Gemini estimate is refreshed from DB, and a warning is printed if any provider is >50% loaded (`[zedplus] quota — claude: 73%, gemini: 58%`).
+- **CLI rate-limit cap persistence** (`src/repl/mod.rs`): when `claude-cli` returns a rate limit error (agent or streaming path), the cap is immediately written to the quota cache with a 4-hour expiry — future turns (and sessions) skip claude-cli proactively.
+- **`find_low_pressure_alias`** (`src/router/rules.rs`): finds the best non-local registry alias whose provider has <50% quota pressure — used by `router::route()` for API-path rerouting.
+- **`[quotas]` config section** (`src/config/schema.rs`): two new fields — `gemini_daily_tokens` (default 1,000,000, used to compute Gemini pressure from the DB) and `claude_tokens_per_window` (default 0 = infer from headers).
+- **`quota_cache_file()`** (`src/platform/dirs.rs`): returns `~/.config/zedplus/quota_cache.json`.
+- **`router::route()` gains `quota: Option<&QuotaCache>`** (`src/router/mod.rs`): when quota data is available and a provider is under pressure, the router transparently selects the best alternative alias. The `--explain` reason now says `(quota rerouted)` when this activates.
+
+### Version bump
+`0.12.0` → `0.13.0`
+
+---
+
 ## [0.12.0] - 2026-05-20
 
 ### Fixed

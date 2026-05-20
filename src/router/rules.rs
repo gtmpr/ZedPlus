@@ -3,6 +3,7 @@ use crate::config::{
     models::ModelRegistry,
     schema::{Config, RoutingPriority},
 };
+use crate::platform::quota::QuotaCache;
 use super::classifier::TaskType;
 
 pub fn select_editor_alias(config: &Config, registry: &ModelRegistry) -> String {
@@ -132,7 +133,30 @@ fn base_alias_for_task(task: &TaskType, config: &Config) -> String {
     }
 }
 
-fn task_strength(task: &TaskType) -> &'static str {
+/// Try to find an alias whose provider is not under quota pressure.
+/// Returns the best alternative, or `None` if every alternative is worse or also pressured.
+pub fn find_low_pressure_alias(
+    current_alias: &str,
+    task: &TaskType,
+    registry: &ModelRegistry,
+    cache: &QuotaCache,
+) -> Option<String> {
+    let strength = task_strength(task);
+    // Find the highest-quality non-local alias whose provider has <50% pressure.
+    registry
+        .models
+        .iter()
+        .filter(|(key, m)| {
+            key.as_str() != current_alias
+                && !m.is_local
+                && (strength.is_empty() || m.strengths.iter().any(|s| s == strength))
+                && cache.pressure(&m.provider) < 0.50
+        })
+        .max_by_key(|(_, m)| m.quality_tier)
+        .map(|(k, _)| k.clone())
+}
+
+pub fn task_strength(task: &TaskType) -> &'static str {
     match task {
         TaskType::CodeReview => "code_review",
         TaskType::ComplexReasoning => "complex_reasoning",

@@ -9,6 +9,7 @@ pub use classifier::TaskType;
 use crate::{
     backends,
     config::{costs::CostsTable, models::ModelRegistry, schema::Config},
+    platform::quota::QuotaCache,
 };
 
 #[derive(Debug)]
@@ -26,7 +27,7 @@ pub struct RoutingDecision {
     pub is_architect_mode: bool,
 }
 
-/// Core routing pipeline: classify → select → estimate → return decision.
+/// Core routing pipeline: classify → select → quota check → estimate → return decision.
 pub fn route(
     query: &str,
     config: &Config,
@@ -35,6 +36,7 @@ pub fn route(
     forced_model: Option<&str>,
     force_local: bool,
     force_cheap: bool,
+    quota: Option<&QuotaCache>,
 ) -> RoutingDecision {
     let task_type = classifier::classify(query);
     let eligibility = architect::check_eligibility(query, &task_type, config);
@@ -78,6 +80,31 @@ pub fn route(
         rules::select_alias(&task_type, config, registry)
     };
 
+    // Quota-aware rerouting: if the chosen provider is under pressure and no user override
+    // is active, try to find an equivalent alias from a less-loaded provider.
+    let mut quota_rerouted = false;
+    let alias = if forced_model.is_none() && !force_local && !force_cheap {
+        if let Some(cache) = quota {
+            let provider = backends::resolve_model(&alias, registry)
+                .map(|(p, _)| p)
+                .unwrap_or_else(|| infer_provider(&alias));
+            if cache.should_reroute(&provider, &task_type) {
+                if let Some(alt) = rules::find_low_pressure_alias(&alias, &task_type, registry, cache) {
+                    quota_rerouted = true;
+                    alt
+                } else {
+                    alias
+                }
+            } else {
+                alias
+            }
+        } else {
+            alias
+        }
+    } else {
+        alias
+    };
+
     let (provider, model_id) = backends::resolve_model(&alias, registry)
         .unwrap_or_else(|| {
             let prov = infer_provider(&alias);
@@ -106,6 +133,8 @@ pub fn route(
         "forced local".to_string()
     } else if force_cheap {
         format!("forced cheap → {alias}")
+    } else if quota_rerouted {
+        format!("{} rule → {alias} (quota rerouted)", task_type.as_str())
     } else {
         format!("{} rule → {alias}", task_type.as_str())
     };

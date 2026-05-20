@@ -45,6 +45,10 @@ pub fn train_dir() -> Result<PathBuf> {
     Ok(data_dir()?.join("train"))
 }
 
+pub fn quota_cache_file() -> Result<PathBuf> {
+    Ok(config_dir()?.join("quota_cache.json"))
+}
+
 pub fn ensure_dirs() -> Result<()> {
     let dirs = [config_dir()?, data_dir()?, distill_dir()?, bench_dir()?, train_dir()?, skills_dir()?];
     for dir in &dirs {

@@ -1,6 +1,6 @@
 [package]
 name = "zedplus"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 description = "Smart AI routing CLI with realtime code indexing and response distillation"
 license = "MIT"

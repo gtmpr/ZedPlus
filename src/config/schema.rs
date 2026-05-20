@@ -47,6 +47,9 @@ pub struct Config {
 
     #[serde(default)]
     pub brainstorm: BrainstormConfig,
+
+    #[serde(default)]
+    pub quotas: QuotasConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -442,6 +445,25 @@ impl Default for BrainstormConfig {
             convergence_threshold: 0.62,
             max_delphi_rounds: 3,
             auto_debate_threshold_tokens: 0,
+        }
+    }
+}
+
+/// Quota-aware routing budgets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QuotasConfig {
+    /// Estimated Gemini daily token budget (0 = tracking disabled).
+    /// Used to compute Gemini pressure from the local `usage` DB.
+    pub gemini_daily_tokens: u64,
+    /// Override for the Claude API token window size (0 = use value from response headers).
+    pub claude_tokens_per_window: u64,
+}
+
+impl Default for QuotasConfig {
+    fn default() -> Self {
+        Self {
+            gemini_daily_tokens: 1_000_000,
+            claude_tokens_per_window: 0,
         }
     }
 }

@@ -34,6 +34,7 @@ pub async fn run(description: &str, inline: bool) -> Result<()> {
         None,
         false,
         true, // cheap=true
+        None,
     );
     let api_key = crate::get_api_key(&decision.provider, &cfg).unwrap_or_default();
     let ollama_url = cfg

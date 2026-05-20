@@ -105,6 +105,11 @@ impl Backend for ClaudeBackend {
         )
         .await?;
 
+        // Capture ratelimit headers before consuming the body.
+        let rl_remaining = parse_header_u64(resp.headers(), "anthropic-ratelimit-tokens-remaining");
+        let rl_limit     = parse_header_u64(resp.headers(), "anthropic-ratelimit-tokens-limit");
+        let rl_reset     = parse_header_str(resp.headers(), "anthropic-ratelimit-tokens-reset");
+
         let data: Value = resp
             .json()
             .await
@@ -120,6 +125,8 @@ impl Backend for ClaudeBackend {
             .as_u64()
             .unwrap_or(0)
             > 0;
+
+        update_quota_cache(rl_remaining, rl_limit, rl_reset.as_deref());
 
         Ok(CompletionResult {
             content,
@@ -273,6 +280,11 @@ impl Backend for ClaudeBackend {
         )
         .await?;
 
+        // Capture ratelimit headers before streaming the body.
+        let rl_remaining = parse_header_u64(resp.headers(), "anthropic-ratelimit-tokens-remaining");
+        let rl_limit     = parse_header_u64(resp.headers(), "anthropic-ratelimit-tokens-limit");
+        let rl_reset     = parse_header_str(resp.headers(), "anthropic-ratelimit-tokens-reset");
+
         let mut stream = resp.bytes_stream();
         let mut buf = String::new();
         let mut content = String::new();
@@ -322,11 +334,31 @@ impl Backend for ClaudeBackend {
             }
         }
 
+        update_quota_cache(rl_remaining, rl_limit, rl_reset.as_deref());
+
         Ok(CompletionResult {
             content,
             input_tokens,
             output_tokens,
             cache_hit,
         })
+    }
+}
+
+// ── Header helpers ────────────────────────────────────────────────────────────
+
+fn parse_header_u64(headers: &reqwest::header::HeaderMap, name: &str) -> Option<u64> {
+    headers.get(name)?.to_str().ok()?.parse().ok()
+}
+
+fn parse_header_str(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers.get(name)?.to_str().ok().map(|s| s.to_string())
+}
+
+fn update_quota_cache(remaining: Option<u64>, limit: Option<u64>, reset: Option<&str>) {
+    if let (Some(rem), Some(lim)) = (remaining, limit) {
+        let mut cache = crate::platform::quota::QuotaCache::load();
+        cache.update_from_claude_headers(rem, lim, reset.unwrap_or(""));
+        cache.save();
     }
 }

@@ -267,6 +267,17 @@ async fn run_inner(
         eprintln!("[zedplus] codex CLI detected — code tasks eligible for codex-mini routing");
     }
 
+    // Load and refresh quota state; report notable pressure at session start.
+    {
+        let mut quota = crate::platform::quota::QuotaCache::load();
+        quota.expire_stale_caps();
+        let _ = quota.refresh_gemini(cfg.config.quotas.gemini_daily_tokens);
+        quota.save();
+        if let Some(status) = quota.status_line() {
+            eprintln!("\x1b[33m[zedplus] {status}\x1b[0m");
+        }
+    }
+
     // First-run UI preference prompt — only when the global config file is brand new
     // (i.e. no config existed before this session started) and a CLI tool is available.
     let is_first_run = dirs::global_config_file()
@@ -640,6 +651,12 @@ async fn run_turn(
         apply_at_override(at, &mut flags, cli);
     }
 
+    // Load quota cache once per turn — it may have been updated by prior API calls
+    // (claude.rs writes headers as a side effect) or by rate-limit events.
+    let mut quota = crate::platform::quota::QuotaCache::load();
+    quota.expire_stale_caps();
+    let _ = quota.refresh_gemini(cfg.config.quotas.gemini_daily_tokens);
+
     let decision = router::route(
         query,
         &cfg.config,
@@ -648,6 +665,7 @@ async fn run_turn(
         flags.model.as_deref(),
         flags.local,
         flags.cheap,
+        Some(&quota),
     );
 
     if flags.explain {
@@ -774,20 +792,52 @@ async fn run_turn(
                     };
                     (backends::create_backend(&decision.provider, &api_key, ollama_url), decision.provider.clone(), decision.model_id.clone())
                 }
-            } else if cli.claude {
-                eprintln!("\x1b[90m[using claude-cli subscription]\x1b[0m");
-                (
-                    Box::new(backends::claude_cli::ClaudeCliBackend::new(&cli.claude_bin)) as Box<dyn backends::Backend>,
-                    "claude-cli".to_string(),
-                    String::new(),
-                )
-            } else if cli.gemini {
-                eprintln!("\x1b[90m[using gemini-cli subscription]\x1b[0m");
-                (
-                    Box::new(backends::gemini_cli::GeminiCliBackend::new(&cli.gemini_bin)) as Box<dyn backends::Backend>,
-                    "gemini-cli".to_string(),
-                    String::new(),
-                )
+            } else if cli.claude || cli.gemini {
+                // Quota-aware CLI subscription selection:
+                // Prefer the CLI with lower pressure; skip one that is at ≥95% (capped).
+                let claude_pressure  = if cli.claude { quota.pressure("claude-cli") } else { 2.0 };
+                let gemini_pressure  = if cli.gemini { quota.pressure("gemini-cli") } else { 2.0 };
+                let use_claude = claude_pressure < 0.95
+                    && (claude_pressure <= gemini_pressure || gemini_pressure >= 0.95);
+                let use_gemini = !use_claude && gemini_pressure < 0.95;
+
+                if use_claude {
+                    if claude_pressure >= 0.50 {
+                        eprintln!("\x1b[90m[claude-cli: {:.0}% quota — preferred over gemini ({:.0}%)]\x1b[0m",
+                            claude_pressure * 100.0, gemini_pressure * 100.0);
+                    } else {
+                        eprintln!("\x1b[90m[using claude-cli subscription]\x1b[0m");
+                    }
+                    (
+                        Box::new(backends::claude_cli::ClaudeCliBackend::new(&cli.claude_bin)) as Box<dyn backends::Backend>,
+                        "claude-cli".to_string(),
+                        String::new(),
+                    )
+                } else if use_gemini {
+                    if gemini_pressure >= 0.50 {
+                        eprintln!("\x1b[90m[gemini-cli: {:.0}% quota — preferred over claude ({:.0}%)]\x1b[0m",
+                            gemini_pressure * 100.0, claude_pressure * 100.0);
+                    } else {
+                        eprintln!("\x1b[90m[using gemini-cli subscription]\x1b[0m");
+                    }
+                    (
+                        Box::new(backends::gemini_cli::GeminiCliBackend::new(&cli.gemini_bin)) as Box<dyn backends::Backend>,
+                        "gemini-cli".to_string(),
+                        String::new(),
+                    )
+                } else {
+                    // Both CLIs are exhausted — fall through to API.
+                    eprintln!("\x1b[33m[quota] Both CLI subscriptions appear exhausted — falling back to API.\x1b[0m");
+                    let api_key = match crate::get_api_key(&decision.provider, cfg) {
+                        Ok(k) => k,
+                        Err(e) => { eprintln!("Error: {e}"); return Ok(()); }
+                    };
+                    (
+                        backends::create_backend(&decision.provider, &api_key, ollama_url),
+                        decision.provider.clone(),
+                        decision.model_id.clone(),
+                    )
+                }
             } else {
                 let api_key = match crate::get_api_key(&decision.provider, cfg) {
                     Ok(k) => k,
@@ -959,6 +1009,11 @@ async fn run_turn(
                 let _ = cancel_listener.join();
                 let msg = e.to_string();
                 if msg.contains("Rate limit") || msg.contains("rate limit") {
+                    // Persist the CLI cap for future turns.
+                    if active_provider == "claude-cli" {
+                        let mut qc = crate::platform::quota::QuotaCache::load();
+                        qc.mark_claude_cli_capped();
+                    }
                     if let Some((fl_alias, fl_prov, fl_mid)) =
                         crate::failover_provider(&active_provider, cfg)
                     {
@@ -1141,6 +1196,11 @@ async fn run_turn(
             });
         }
         Err(backends::BackendError::RateLimit) => {
+            // Persist the cap so future turns (and sessions) skip this provider proactively.
+            if active_provider == "claude-cli" {
+                let mut qc = crate::platform::quota::QuotaCache::load();
+                qc.mark_claude_cli_capped();
+            }
             if let Some((fl_alias, fl_prov, fl_mid)) =
                 crate::failover_provider(&active_provider, cfg)
             {
