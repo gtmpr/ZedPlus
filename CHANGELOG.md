@@ -8,6 +8,19 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.8.1] - 2026-05-20
+
+### Added
+- **Architect/Editor two-phase routing** (`run_architect_editor_turn`): On complex `CodeReview` or `ComplexReasoning` queries (keyword match or length ≥ threshold), ZedPlus automatically runs two calls — a high-quality architect model produces a structured implementation plan, then a fast editor model implements it. Both phases stream output inline with labeled headers (`── Architect phase ──` / `── Editor phase ──`). The combined plan + implementation is stored in session context.
+- **`/explain` architect/editor cost split**: When architect/editor mode would activate, `/explain` now additionally shows both model IDs and the estimated cost split (`Arch/Edit: … → …`, `Split cost: $x.xx (arch) + $x.xx (edit)`).
+- Architect/editor mode is bypassed when an explicit `@mention`, `/model`, `/local`, or `/cheap` override is active.
+- `is_architect_split: true` flag in distiller entries produced by architect/editor turns.
+
+### Version bump
+`0.8.0` → `0.8.1`
+
+---
+
 ## [0.8.0] - 2026-05-20
 
 ### Added

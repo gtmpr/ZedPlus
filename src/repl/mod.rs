@@ -607,6 +607,22 @@ async fn run_turn(
 
     if flags.explain {
         print_routing_decision(&decision);
+        if at_override.is_none() && flags.model.is_none() && !flags.local && !flags.cheap {
+            let elig = router::architect::check_eligibility(query, &decision.task_type, &cfg.config);
+            if elig.is_eligible {
+                let arch_alias = router::rules::select_architect_alias(&cfg.config, &cfg.models);
+                let edit_alias = router::rules::select_editor_alias(&cfg.config, &cfg.models);
+                let arch_mid = backends::resolve_model(&arch_alias, &cfg.models)
+                    .map(|(_, id)| id).unwrap_or_else(|| arch_alias.clone());
+                let edit_mid = backends::resolve_model(&edit_alias, &cfg.models)
+                    .map(|(_, id)| id).unwrap_or_else(|| edit_alias.clone());
+                let est = decision.estimated_input_tokens;
+                let arch_cost = cfg.costs.cost_usd(&arch_mid, est, est * 2);
+                let edit_cost = cfg.costs.cost_usd(&edit_mid, est * 3, est * 4);
+                println!("  Arch/Edit:  {} (plan) → {} (implement)", arch_mid, edit_mid);
+                println!("  Split cost: ${:.6} (arch) + ${:.6} (edit)", arch_cost, edit_cost);
+            }
+        }
         return Ok(());
     }
 
@@ -927,6 +943,17 @@ async fn run_turn(
         return Ok(());
     }
 
+    // ── Architect/Editor two-phase split ─────────────────────────────────────
+    // Triggers on complex code tasks when no explicit provider/model override is active.
+    if at_override.is_none() && flags.model.is_none() && !flags.local && !flags.cheap {
+        let elig = router::architect::check_eligibility(query, &decision.task_type, &cfg.config);
+        if elig.is_eligible {
+            return run_architect_editor_turn(
+                query, session, cfg, index_store, embedder, ollama_url, cli, &flags, &decision,
+            ).await;
+        }
+    }
+
     // ── Standard streaming mode ───────────────────────────────────────────────
     let context_blocks =
         assemble_context(query, &decision.task_type, index_store, embedder).await;
@@ -1094,6 +1121,229 @@ async fn run_turn(
         }
         Err(e) => {
             eprintln!("\nError: {e}");
+        }
+    }
+
+    Ok(())
+}
+
+/// Two-phase architect/editor turn: a high-quality model plans, a fast model implements.
+async fn run_architect_editor_turn(
+    query: &str,
+    session: &mut Session,
+    cfg: &config::LoadedConfig,
+    index_store: &Option<IndexStore>,
+    embedder: Option<&Embedder>,
+    ollama_url: &str,
+    cli: &detector::CliDetection,
+    flags: &commands::QueryFlags,
+    decision: &router::RoutingDecision,
+) -> Result<()> {
+    let arch_alias = router::rules::select_architect_alias(&cfg.config, &cfg.models);
+    let edit_alias = router::rules::select_editor_alias(&cfg.config, &cfg.models);
+
+    let (arch_prov, arch_mid) = backends::resolve_model(&arch_alias, &cfg.models)
+        .unwrap_or_else(|| (decision.provider.clone(), decision.model_id.clone()));
+    let (edit_prov, edit_mid) = backends::resolve_model(&edit_alias, &cfg.models)
+        .unwrap_or_else(|| (decision.provider.clone(), decision.model_id.clone()));
+
+    let arch_key = crate::get_api_key(&arch_prov, cfg).unwrap_or_default();
+    let edit_key = crate::get_api_key(&edit_prov, cfg).unwrap_or_default();
+    let arch_backend = backends::create_backend(&arch_prov, &arch_key, ollama_url);
+    let edit_backend = backends::create_backend(&edit_prov, &edit_key, ollama_url);
+
+    let context_blocks =
+        assemble_context(query, &decision.task_type, index_store, embedder).await;
+    let base_system = SystemPromptBuilder::new(&cfg.config).build_base_system_prompt();
+
+    // ── Architect phase ────────────────────────────────────────────────────────
+    let mut arch_system = base_system.clone();
+    if let Some(p) = session.active_persona.as_deref().and_then(persona::find) {
+        arch_system.push_str("\n\n");
+        arch_system.push_str(p.system_block);
+    }
+    if !context_blocks.is_empty() {
+        arch_system.push_str("\n\n## Relevant code context\n\n");
+        arch_system.push_str(&context_blocks);
+    }
+    arch_system.push_str(
+        "\n\nYou are acting as the Architect. Produce a detailed, structured implementation plan \
+         only — no code yet. List: files to create or modify, interfaces, data types, key logic \
+         steps, and edge cases. The plan will be handed to an Editor model to implement.",
+    );
+
+    eprintln!("\x1b[90m[architect: {} | editor: {}]\x1b[0m", arch_mid, edit_mid);
+    println!("\x1b[1m── Architect phase ──\x1b[0m");
+
+    let arch_msgs = {
+        let mut m = session.messages.clone();
+        m.push(Message { role: "user".to_string(), content: query.to_string() });
+        m
+    };
+
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let cancel_listener = spawn_cancel_listener(cancel_flag.clone());
+    let spinner_done = Arc::new(AtomicBool::new(false));
+    {
+        let sd = spinner_done.clone();
+        let label = arch_prov.clone();
+        tokio::spawn(async move { run_spinner(sd, &label).await });
+    }
+    let first_tok = Arc::new(AtomicBool::new(true));
+    let ft = first_tok.clone();
+    let sd2 = spinner_done.clone();
+    let cf = cancel_flag.clone();
+
+    let arch_result = arch_backend.complete_streaming(
+        CompletionOptions {
+            model_id: arch_mid.clone(),
+            system: Some(arch_system),
+            messages: arch_msgs,
+            max_tokens: 2048,
+            use_search_grounding: false,
+            use_cache: false,
+            auto_accept: session.auto_accept,
+        },
+        Box::new(move |token: String| {
+            if cf.load(Ordering::Relaxed) { return; }
+            if ft.swap(false, Ordering::Relaxed) {
+                sd2.store(true, Ordering::Relaxed);
+                eprint!("\r\x1b[K");
+                let _ = io::stderr().flush();
+            }
+            print!("{token}");
+            let _ = io::stdout().flush();
+        }),
+    ).await;
+
+    spinner_done.store(true, Ordering::Relaxed);
+    cancel_flag.store(true, Ordering::Relaxed);
+    let _ = cancel_listener.join();
+
+    let plan_text = match arch_result {
+        Ok(r) => {
+            println!();
+            let cost = cfg.costs.cost_usd(&arch_mid, r.input_tokens, r.output_tokens);
+            session.session_total_cost += cost;
+            session.session_tokens_in += r.input_tokens;
+            session.session_tokens_out += r.output_tokens;
+            session.record_backend(&arch_prov, r.input_tokens, r.output_tokens);
+            r.content
+        }
+        Err(e) => {
+            eprintln!("\n\x1b[31mArchitect phase error: {e}\x1b[0m");
+            return Ok(());
+        }
+    };
+
+    // ── Editor phase ──────────────────────────────────────────────────────────
+    let mut edit_system = base_system;
+    if let Some(p) = session.active_persona.as_deref().and_then(persona::find) {
+        edit_system.push_str("\n\n");
+        edit_system.push_str(p.system_block);
+    }
+    if !context_blocks.is_empty() {
+        edit_system.push_str("\n\n## Relevant code context\n\n");
+        edit_system.push_str(&context_blocks);
+    }
+    edit_system.push_str(
+        "\n\nYou are acting as the Editor. Given the implementation plan below, write complete, \
+         production-ready code. Implement all steps precisely.",
+    );
+
+    println!("\n\x1b[1m── Editor phase ──\x1b[0m");
+
+    let editor_prompt = format!(
+        "# Original request\n{query}\n\n# Implementation plan\n{plan_text}\n\nImplement this now.",
+    );
+    let edit_msgs = {
+        let mut m = session.messages.clone();
+        m.push(Message { role: "user".to_string(), content: editor_prompt });
+        m
+    };
+
+    let cancel_flag2 = Arc::new(AtomicBool::new(false));
+    let cancel_listener2 = spawn_cancel_listener(cancel_flag2.clone());
+    let spinner_done2 = Arc::new(AtomicBool::new(false));
+    {
+        let sd = spinner_done2.clone();
+        let label = edit_prov.clone();
+        tokio::spawn(async move { run_spinner(sd, &label).await });
+    }
+    let first_tok2 = Arc::new(AtomicBool::new(true));
+    let ft2 = first_tok2.clone();
+    let sd4 = spinner_done2.clone();
+    let cf2 = cancel_flag2.clone();
+
+    let edit_result = edit_backend.complete_streaming(
+        CompletionOptions {
+            model_id: edit_mid.clone(),
+            system: Some(edit_system),
+            messages: edit_msgs,
+            max_tokens: 8192,
+            use_search_grounding: false,
+            use_cache: false,
+            auto_accept: session.auto_accept,
+        },
+        Box::new(move |token: String| {
+            if cf2.load(Ordering::Relaxed) { return; }
+            if ft2.swap(false, Ordering::Relaxed) {
+                sd4.store(true, Ordering::Relaxed);
+                eprint!("\r\x1b[K");
+                let _ = io::stderr().flush();
+            }
+            print!("{token}");
+            let _ = io::stdout().flush();
+        }),
+    ).await;
+
+    spinner_done2.store(true, Ordering::Relaxed);
+    cancel_flag2.store(true, Ordering::Relaxed);
+    let _ = cancel_listener2.join();
+
+    match edit_result {
+        Ok(r) => {
+            println!();
+            let cost = cfg.costs.cost_usd(&edit_mid, r.input_tokens, r.output_tokens);
+            session.session_total_cost += cost;
+            session.session_tokens_in += r.input_tokens;
+            session.session_tokens_out += r.output_tokens;
+            session.turn_count += 1;
+            session.record_backend(&edit_prov, r.input_tokens, r.output_tokens);
+
+            let combined = format!("**Plan:**\n{plan_text}\n\n**Implementation:**\n{}", r.content);
+            session.last_response = Some(combined.clone());
+            session.push_user(query.to_string());
+            session.push_assistant(combined.clone());
+            session.model_key = edit_alias.clone();
+            session.model_id = edit_mid.clone();
+            session.provider = edit_prov.clone();
+
+            if session.session_name.is_none() {
+                let heuristic = slug_from_query(query);
+                session.session_name = Some(heuristic);
+                if let Some(llm_name) = generate_session_name(query, cfg, ollama_url).await {
+                    session.session_name = Some(llm_name);
+                }
+            }
+
+            let _ = save_turn(session, query, &combined, &edit_alias, r.input_tokens, r.output_tokens);
+            let _ = distiller::record(distiller::DistillEntry {
+                query: query.to_string(),
+                response: combined,
+                model_key: edit_alias,
+                model_id: edit_mid,
+                task_type: decision.task_type.as_str().to_string(),
+                input_tokens: r.input_tokens,
+                output_tokens: r.output_tokens,
+                cost_usd: cost,
+                cache_hit: false,
+                override_model: flags.model.clone(),
+                is_architect_split: true,
+            });
+        }
+        Err(e) => {
+            eprintln!("\n\x1b[31mEditor phase error: {e}\x1b[0m");
         }
     }
 
