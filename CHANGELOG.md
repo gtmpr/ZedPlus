@@ -8,6 +8,19 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.9.0] - 2026-05-20
+
+### Added
+- **`src/tester/coverage.rs`**: Heuristic test-coverage scanner — walks the project tree and counts test annotations (`#[test]`, `def test_`, `describe(`, `func Test`, `#[cfg(test)]`) without running tests. Returns `CoverageHint { has_tests, test_function_count, test_files }`.
+- **`/fix` REPL command**: After an agent-mode turn where tests failed, ZedPlus stores the stderr in `session.last_test_failure`. `/fix` re-routes that failure to the AI with a targeted "fix this minimal" prompt. After the fix query runs, the failure state is cleared.
+- **Agent test-failure surfacing**: After every successful agent turn, `check_last_test_failure()` queries the `test_runs` SQLite table; if the most recent run failed, prints `[tests still failing] Type /fix to have AI resolve them.` and stores the output for `/fix`.
+- **`session.last_test_failure`** field on `Session` — persists the most recent test failure output within the session.
+
+### Version bump
+`0.8.1` → `0.9.0`
+
+---
+
 ## [0.8.1] - 2026-05-20
 
 ### Added

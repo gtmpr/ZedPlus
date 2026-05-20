@@ -37,3 +37,4 @@ pub fn detect(cwd: &Path) -> TestRunner {
 }
 
 pub mod runner;
+pub mod coverage;

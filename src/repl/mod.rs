@@ -50,6 +50,8 @@ struct Session {
     active_persona: Option<String>,
     /// Per-backend stats: provider → (turns, tokens_in, tokens_out)
     backend_usage: std::collections::HashMap<String, (u32, u32, u32)>,
+    /// Stderr from the most recent test failure (populated after agent writes files).
+    last_test_failure: Option<String>,
 }
 
 impl Session {
@@ -80,6 +82,7 @@ impl Session {
             auto_accept: false,
             active_persona: None,
             backend_usage: std::collections::HashMap::new(),
+            last_test_failure: None,
         }
     }
 
@@ -112,6 +115,7 @@ impl Session {
             auto_accept: false,
             active_persona: None,
             backend_usage: std::collections::HashMap::new(),
+            last_test_failure: None,
         }
     }
 
@@ -433,6 +437,22 @@ async fn run_interactive_loop(
                 handle_ui_command(style.as_deref(), cfg);
                 continue;
             }
+            Some(commands::ReplInput::Fix) => {
+                match &session.last_test_failure.clone() {
+                    Some(failure) => {
+                        let fix_query = format!(
+                            "The test suite is failing. Please read the error output below and fix the \
+                             code — make minimal targeted changes only.\n\nTest failure output:\n```\n{failure}\n```"
+                        );
+                        run_turn(&fix_query, commands::QueryFlags::default(), session, cfg, index_store, embedder, ollama_url, cli).await?;
+                        session.last_test_failure = None;
+                    }
+                    None => {
+                        println!("No test failure recorded. Run in agent mode on a project with tests first.");
+                    }
+                }
+                continue;
+            }
             Some(commands::ReplInput::Query { text, flags }) => {
                 // Phase 8d: multi @-mention routing
                 if let Some(segments) = parse_multi_at_mentions(&text) {
@@ -528,6 +548,10 @@ async fn run_pipe_loop(
             }
             Some(commands::ReplInput::Ui { style }) => {
                 handle_ui_command(style.as_deref(), cfg);
+                continue;
+            }
+            Some(commands::ReplInput::Fix) => {
+                eprintln!("[zedplus] /fix requires an interactive terminal");
                 continue;
             }
             Some(commands::ReplInput::Query { text, flags }) => {
@@ -893,6 +917,12 @@ async fn run_turn(
                     override_model: flags.model.clone(),
                     is_architect_split: false,
                 });
+
+                // Check if the last test run (logged by agent) failed — surface /fix hint.
+                session.last_test_failure = check_last_test_failure();
+                if session.last_test_failure.is_some() {
+                    eprintln!("\x1b[33m[tests still failing] Type /fix to have AI resolve them.\x1b[0m");
+                }
             }
             Err(e) => {
                 spinner_done.store(true, Ordering::Relaxed);
@@ -2164,6 +2194,21 @@ fn prompt_ui_preference(cli: &detector::CliDetection, cfg: &config::LoadedConfig
     match config::write_global(&updated) {
         Ok(()) => println!("UI style set to '{label}'. Change anytime with /ui\n"),
         Err(e) => eprintln!("Could not save UI preference: {e}"),
+    }
+}
+
+/// Query the most recent test_runs row; returns stderr if the run failed.
+fn check_last_test_failure() -> Option<String> {
+    let db_path = crate::platform::dirs::db_file().ok()?;
+    let conn = db::open(&db_path).ok()?;
+    let result: rusqlite::Result<(bool, String)> = conn.query_row(
+        "SELECT passed, output FROM test_runs ORDER BY ts DESC LIMIT 1",
+        [],
+        |row| Ok((row.get::<_, i32>(0)? != 0, row.get::<_, String>(1)?)),
+    );
+    match result {
+        Ok((false, output)) => Some(output),
+        _ => None,
     }
 }
 

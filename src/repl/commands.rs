@@ -30,6 +30,8 @@ pub enum ReplInput {
     Debate { strategy: String, query: String },
     /// `/ui [native|claude|gemini]` — show or change preferred UI style.
     Ui { style: Option<String> },
+    /// `/fix` — send the last test failure to AI for an automatic fix.
+    Fix,
     Exit,
 }
 
@@ -183,6 +185,8 @@ pub fn parse(line: &str) -> Option<ReplInput> {
             }
         }
 
+        "/fix" => Some(ReplInput::Fix),
+
         _ => {
             eprintln!("Unknown command '{cmd}'. Type /help for available commands.");
             None
@@ -214,5 +218,6 @@ pub fn print_help() {
     println!("  @claude/@gemini/@codex/@local/@cheap  Prefix query to route to a specific backend");
     println!("  /ui                 Show current UI style");
     println!("  /ui native|claude|gemini  Switch preferred UI style (saved to config)");
+    println!("  /fix                Send last test failure to AI for an automatic fix");
     println!("  /exit               End session and show summary");
 }
