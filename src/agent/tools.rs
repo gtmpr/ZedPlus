@@ -221,6 +221,20 @@ pub fn all_tools() -> Vec<ToolDef> {
                 "required": ["path"]
             }),
         },
+        ToolDef {
+            name: "create_dir",
+            description: "Create a directory (and any missing parent directories). Idempotent — succeeds even if the directory already exists.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path of the directory to create (relative to cwd or absolute)"
+                    }
+                },
+                "required": ["path"]
+            }),
+        },
     ]
 }
 
@@ -242,6 +256,17 @@ pub fn execute(name: &str, input: &Value, cwd: &Path, auto_accept: bool) -> (Str
                 (format!("Changed directory to {}", target.display()), false)
             } else {
                 (format!("Error: directory does not exist: {}", target.display()), true)
+            }
+        }
+        "create_dir" => {
+            let path_str = match input["path"].as_str() {
+                Some(p) => p,
+                None => return ("Missing 'path' argument".to_string(), true, None),
+            };
+            let target = resolve_path(path_str, cwd);
+            match std::fs::create_dir_all(&target) {
+                Ok(()) => (format!("Created directory {}", target.display()), false),
+                Err(e) => (format!("Error creating directory {}: {e}", target.display()), true),
             }
         }
         "read_file" => {
@@ -326,15 +351,20 @@ pub fn execute(name: &str, input: &Value, cwd: &Path, auto_accept: bool) -> (Str
         _ => (format!("Unknown tool: {name}"), true),
     };
 
-    // Apply 150-line truncation to all tool outputs to save context tokens
-    let lines: Vec<&str> = raw_output.lines().collect();
-    let final_output = if lines.len() > 155 {
-        let truncated = lines[..150].join("\n");
-        format!(
-            "{}\n\n[... {} lines truncated for brevity. Use more specific parameters to see more ...]",
-            truncated,
-            lines.len() - 150
-        )
+    // Apply 150-line truncation to non-error outputs — errors must not be truncated
+    // because Rust/test diagnostics put the most useful line at the bottom.
+    let final_output = if !is_error {
+        let lines: Vec<&str> = raw_output.lines().collect();
+        if lines.len() > 155 {
+            let truncated = lines[..150].join("\n");
+            format!(
+                "{}\n\n[... {} lines truncated. Use more specific parameters to see more ...]",
+                truncated,
+                lines.len() - 150
+            )
+        } else {
+            raw_output
+        }
     } else {
         raw_output
     };
@@ -371,6 +401,13 @@ fn tool_read_file(path_str: &str, start_line: usize, end_line: usize, cwd: &Path
     let mut out = String::new();
     for i in start..end {
         out.push_str(&format!("{:>4}: {}\n", i + 1, lines[i]));
+    }
+
+    if end < lines.len() {
+        out.push_str(&format!(
+            "\n[Showing lines {}–{} of {}. Use start_line/end_line to read more.]\n",
+            start + 1, end, lines.len()
+        ));
     }
 
     (out, false)
@@ -765,9 +802,18 @@ fn glob_match_segment(pattern: &str, name: &str) -> bool {
 
 fn is_safe_command(cmd: &str) -> bool {
     let cmd = cmd.trim();
+
+    // Any shell operator can chain into arbitrary commands — reject immediately
+    const SHELL_OPS: &[&str] = &["|", "&&", "||", ";", "`", "$(", ">", "<"];
+    for op in SHELL_OPS {
+        if cmd.contains(op) {
+            return false;
+        }
+    }
+
     let parts: Vec<&str> = cmd.split_whitespace().collect();
     if parts.is_empty() { return false; }
-    
+
     let base = parts[0].to_lowercase();
     let base = base.strip_suffix(".exe").unwrap_or(&base);
 

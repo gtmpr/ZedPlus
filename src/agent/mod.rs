@@ -272,7 +272,8 @@ fn strip_tool_call_tags(text: &str) -> String {
 
 /// Run the agentic loop until the model stops calling tools or `max_steps` is reached.
 ///
-/// Returns `(final_text, total_input_tokens, total_output_tokens)`.
+/// Returns `(final_text, total_input_tokens, total_output_tokens, reward_signal)`.
+/// reward_signal is non-zero only when background tests ran (1.0 = passed, -1.0 = failed).
 pub async fn run(
     query: &str,
     system: Option<&str>,
@@ -285,7 +286,7 @@ pub async fn run(
     auto_accept: bool,
     ollama_url: &str,
     cancel: Arc<AtomicBool>,
-) -> anyhow::Result<(String, u32, u32)> {
+) -> anyhow::Result<(String, u32, u32, f64)> {
     let mut agent_messages: Vec<AgentMessage> = Vec::new();
     let mut active_system = system.map(|s| s.to_string()).unwrap_or_default();
 
@@ -299,26 +300,24 @@ pub async fn run(
         agent_messages.push(am);
     }
 
-    // Add the user's query
-    agent_messages.push(AgentMessage::user_text(query));
-
-    // Semantic retrieval as middleware: Automatically search for relevant context 
-    // before the model even starts its turn.
+    // Semantic retrieval as middleware: build context first, then push a single user message
+    // to avoid two consecutive user turns which many APIs reject.
+    let mut full_query = query.to_string();
     if let Ok(chunks) = crate::indexer::similarity_search(query, 3, ollama_url).await {
         if !chunks.is_empty() {
-            let mut context = String::from("### Semantic Context (Automatic Retrieval)\n");
-            for chunk in chunks {
-                context.push_str(&format!(
+            full_query.push_str("\n\n### Semantic Context (Automatic Retrieval)\n");
+            for chunk in &chunks {
+                full_query.push_str(&format!(
                     "File: {} :: {}\n{}\n\n",
                     chunk.file_path,
                     chunk.symbol.as_deref().unwrap_or("(file)"),
                     chunk.content
                 ));
             }
-            agent_messages.push(AgentMessage::user_text(&context));
             println!("\x1b[90m[agent] Auto-retrieved relevant code context.\x1b[0m");
         }
     }
+    agent_messages.push(AgentMessage::user_text(full_query));
 
     let all_tools = tools::all_tools();
     let mut accumulated_text = String::new();
@@ -332,6 +331,7 @@ let mut tools_executed = 0u32;
 let mut retry_count = 0u32;
 let mut last_model_id = model_id.to_string();
 let mut active_cwd = cwd.to_path_buf();
+let mut pending_reward: f64 = 0.0;
 
 for step in 0..max_steps {
     if cancel.load(Ordering::Relaxed) {
@@ -420,11 +420,11 @@ for step in 0..max_steps {
                         if let Ok(tr) = test_res {
                             if !tr.passed {
                                 retry_count += 1;
-                                let _ = crate::distiller::update_reward(-1.0);
+                                pending_reward = -1.0;
                                 (format!("FILE WRITTEN SUCCESSFULLY, BUT TESTS FAILED:\n\n{}", tr.stderr), true)
                             } else {
-                                retry_count = 0; // Reset on success
-                                let _ = crate::distiller::update_reward(1.0);
+                                retry_count = 0;
+                                pending_reward = 1.0;
                                 (res.0, res.1)
                             }
                         } else { (res.0, res.1) }
@@ -476,7 +476,7 @@ for step in 0..max_steps {
         ));
     }
 
-    Ok((accumulated_text, total_input, total_output))
+    Ok((accumulated_text, total_input, total_output, pending_reward))
 }
 
 fn execute_skill_search(input: &serde_json::Value, registry: &crate::skills::SkillRegistry) -> (String, bool) {

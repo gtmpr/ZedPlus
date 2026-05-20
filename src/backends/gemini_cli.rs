@@ -60,6 +60,13 @@ impl Backend for GeminiCliBackend {
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
+            let err_lower = err.to_lowercase();
+            if err_lower.contains("usage limit") || err_lower.contains("rate limit")
+                || err_lower.contains("too many requests") || err_lower.contains("quota")
+                || err_lower.contains("resource_exhausted")
+            {
+                return Err(BackendError::RateLimit);
+            }
             return Err(BackendError::Other(anyhow::anyhow!("gemini CLI: {err}")));
         }
 
@@ -110,10 +117,23 @@ impl Backend for GeminiCliBackend {
             }
         }
 
+        let mut stderr_handle = child.stderr.take();
         let status = child.wait().await.map_err(|e| BackendError::Other(e.into()))?;
         if !status.success() {
+            let mut err_text = String::new();
+            if let Some(ref mut se) = stderr_handle {
+                use tokio::io::AsyncReadExt;
+                let _ = se.read_to_string(&mut err_text).await;
+            }
+            let err_lower = err_text.to_lowercase();
+            if err_lower.contains("usage limit") || err_lower.contains("rate limit")
+                || err_lower.contains("too many requests") || err_lower.contains("quota")
+                || err_lower.contains("resource_exhausted")
+            {
+                return Err(BackendError::RateLimit);
+            }
             return Err(BackendError::Other(anyhow::anyhow!(
-                "gemini CLI exited with {status}"
+                "gemini CLI exited with {status}: {err_text}"
             )));
         }
 

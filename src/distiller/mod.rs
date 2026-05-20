@@ -25,23 +25,25 @@ pub struct DistillEntry {
 }
 
 /// Append an Alpaca-format JSONL line and write a usage row to SQLite.
-pub fn record(entry: DistillEntry) -> Result<()> {
+/// Returns the SQLite row ID of the inserted usage record so callers can
+/// apply a reward signal to the exact row without relying on MAX(id).
+pub fn record(entry: DistillEntry) -> Result<i64> {
     let now = Utc::now();
     let ts = now.timestamp();
 
     write_jsonl(&entry, ts, &now)?;
-    write_usage(&entry, ts)?;
+    let row_id = write_usage(&entry, ts)?;
 
-    Ok(())
+    Ok(row_id)
 }
 
-/// Update the reward signal for the most recent usage row.
-pub fn update_reward(reward: f64) -> Result<()> {
+/// Update the reward signal for the given usage row.
+pub fn update_reward(row_id: i64, reward: f64) -> Result<()> {
     let db_path = crate::platform::dirs::db_file()?;
     let conn = crate::db::open(&db_path)?;
     conn.execute(
-        "UPDATE usage SET reward_signal = ?1 WHERE id = (SELECT MAX(id) FROM usage)",
-        params![reward],
+        "UPDATE usage SET reward_signal = ?1 WHERE id = ?2",
+        params![reward, row_id],
     )?;
     Ok(())
 }
@@ -152,7 +154,7 @@ fn write_jsonl(entry: &DistillEntry, ts: i64, now: &chrono::DateTime<Utc>) -> Re
     Ok(())
 }
 
-fn write_usage(entry: &DistillEntry, ts: i64) -> Result<()> {
+fn write_usage(entry: &DistillEntry, ts: i64) -> Result<i64> {
     let db_path = crate::platform::dirs::db_file()?;
     let conn = crate::db::open(&db_path)?;
 
@@ -187,5 +189,5 @@ fn write_usage(entry: &DistillEntry, ts: i64) -> Result<()> {
         ],
     )?;
 
-    Ok(())
+    Ok(conn.last_insert_rowid())
 }

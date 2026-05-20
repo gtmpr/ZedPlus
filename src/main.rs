@@ -299,14 +299,15 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
         )
         .await
         {
-            Ok((final_text, tokens_in, tokens_out)) => {
+            Ok((final_text, tokens_in, tokens_out, pending_reward)) => {
                 println!();
                 if args.apply {
                     let _ = apply::apply_response(&final_text, &cwd);
                 }
                 let actual_cost =
                     cfg.costs.cost_usd(&decision.model_id, tokens_in, tokens_out);
-                let _ = distiller::record(distiller::DistillEntry {
+                let ask_session_id = format!("ask-{:x}", chrono::Utc::now().timestamp_millis());
+                if let Ok(row_id) = distiller::record(distiller::DistillEntry {
                     query: args.query.clone(),
                     response: final_text,
                     model_key: decision.model_key.clone(),
@@ -320,8 +321,12 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
                     is_architect_split: false,
                     reward_signal: 0.0,
                     edit_accepted: false,
-                    session_id: None,
-                });
+                    session_id: Some(ask_session_id),
+                }) {
+                    if pending_reward != 0.0 {
+                        let _ = distiller::update_reward(row_id, pending_reward);
+                    }
+                }
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -331,7 +336,7 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
                         let fl_key = get_api_key(&fl_prov, &cfg).unwrap_or_default();
                         let fl_backend = backends::create_backend(&fl_prov, &fl_key, ollama_url);
                         match agent::run(&args.query, Some(&system_prompt), &[], fl_backend.as_ref(), &fl_mid, 4096, 20, &cwd, args.yes, ollama_url, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).await {
-                            Ok((t, _, _)) => { println!(); println!("{t}"); }
+                            Ok((t, _, _, _)) => { println!(); println!("{t}"); }
                             Err(e2) => eprintln!("Error after failover: {e2}"),
                         }
                     } else {
@@ -428,7 +433,7 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
                         is_architect_split: false,
                         reward_signal: 0.0,
                         edit_accepted: false,
-                        session_id: None,
+                        session_id: Some(format!("ask-{:x}", chrono::Utc::now().timestamp_millis())),
                     });
                     std::process::exit(1);
                 }
@@ -448,7 +453,7 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
                 is_architect_split: false,
                 reward_signal: 0.0,
                 edit_accepted: false,
-                session_id: None,
+                session_id: Some(format!("ask-{:x}", chrono::Utc::now().timestamp_millis())),
             });
         }
         Err(backends::BackendError::RateLimit) => {
@@ -534,7 +539,7 @@ async fn cmd_ask_with_fallback(
                 is_architect_split: false,
                 reward_signal: 0.0,
                 edit_accepted: false,
-                session_id: None,
+                session_id: Some(format!("ask-{:x}", chrono::Utc::now().timestamp_millis())),
             });
         }
         Err(e) => return Err(e.into()),
@@ -607,7 +612,7 @@ async fn cmd_search(args: cli::SearchArgs) -> Result<()> {
                 cost_usd: actual_cost,
                 cache_hit: r.cache_hit,
                 override_model: None,
-                is_architect_split: true,
+                is_architect_split: false,
                 reward_signal: 0.0,
                 edit_accepted: false,
                 session_id: None,

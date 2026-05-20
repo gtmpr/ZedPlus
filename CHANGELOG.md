@@ -8,6 +8,26 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.12.0] - 2026-05-20
+
+### Fixed
+- **Double user message in agent semantic middleware** (`agent/mod.rs`): semantic context is now merged into the query string before pushing a single user message, preventing consecutive user turns that many APIs (including Claude) reject.
+- **`is_safe_command` shell operator bypass** (`agent/tools.rs`): commands containing `|`, `&&`, `||`, `;`, `` ` ``, `$(`, `>`, or `<` are now rejected immediately — the previous check only looked at the base command name, allowing piped/redirected commands to auto-accept.
+- **`cmd_search` wrongly marked `is_architect_split: true`** (`main.rs`): corrected back to `false`; web search is not an Architect/Editor two-phase turn.
+- **`update_reward` targeting wrong DB row** (`distiller/mod.rs`): `write_usage` now returns `last_insert_rowid()`, `record()` threads it back to callers, and `update_reward(row_id, reward)` stamps the exact row. Agent loop accumulates `pending_reward` and applies it after `distiller::record` — no more racing against MAX(id).
+- **`tool_read_file` missing total line count** (`agent/tools.rs`): windowed reads now append `[Showing lines X–Y of Z. Use start_line/end_line to read more.]` so the model knows when there is more content.
+- **Global 150-line truncation on error output** (`agent/tools.rs`): truncation is now skipped when `is_error = true` so Rust/test diagnostics are never cut off mid-message.
+- **`session_id: None` in all `cmd_ask` paths** (`main.rs`): every distillation record from a one-shot `zedplus ask` now carries `ask-<timestamp-hex>` so usage analytics work outside the REPL.
+- **CLI rate limit / usage cap not triggering failover** (`backends/claude_cli.rs`, `backends/gemini_cli.rs`): both CLI backends now inspect stderr for "usage limit", "rate limit", "quota", "RESOURCE_EXHAUSTED" and return `BackendError::RateLimit`, which feeds the existing `failover_provider` path.
+
+### Added
+- **`create_dir` agent tool** (`agent/tools.rs`): lets the agent create new directories (with `create_dir_all`) when scaffolding modules or projects.
+
+### Version bump
+`0.11.0` → `0.12.0`
+
+---
+
 ## [0.11.0] - 2026-05-20
 
 ### Fixed

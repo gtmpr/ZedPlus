@@ -880,7 +880,7 @@ async fn run_turn(
         )
         .await
         {
-            Ok((final_text, tokens_in, tokens_out)) => {
+            Ok((final_text, tokens_in, tokens_out, pending_reward)) => {
                 spinner_done.store(true, Ordering::Relaxed);
                 let _ = spinner_handle.await;
                 cancel_flag.store(true, Ordering::Relaxed);
@@ -925,7 +925,7 @@ async fn run_turn(
                     tokens_out,
                 );
 
-                let _ = distiller::record(distiller::DistillEntry {
+                if let Ok(row_id) = distiller::record(distiller::DistillEntry {
                     query: query.to_string(),
                     response: final_text,
                     model_key: recorded_model,
@@ -940,7 +940,11 @@ async fn run_turn(
                     reward_signal: 0.0,
                     edit_accepted: false,
                     session_id: Some(session.session_id.clone()),
-                });
+                }) {
+                    if pending_reward != 0.0 {
+                        let _ = distiller::update_reward(row_id, pending_reward);
+                    }
+                }
 
                 // Check if the last test run (logged by agent) failed — surface /fix hint.
                 session.last_test_failure = check_last_test_failure();
@@ -967,7 +971,7 @@ async fn run_turn(
                             Arc::new(AtomicBool::new(false)),
                         ).await;
                         match retry {
-                            Ok((t, ti, to)) => {
+                            Ok((t, ti, to, _)) => {
                                 println!();
                                 let cost = cfg.costs.cost_usd(&fl_mid, ti, to);
                                 session.session_total_cost += cost;

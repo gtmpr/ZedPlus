@@ -397,7 +397,7 @@ async fn run_build_with_fallback(
             ollama_url,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         ).await {
-            Ok((summary, _, _)) => return summary,
+            Ok((summary, _, _, _)) => return summary,
             Err(e) => {
                 let msg = e.to_string();
                 if is_retryable(&msg) {
