@@ -1,0 +1,4 @@
+[toolchain]
+channel = "stable"
+# Local Windows development uses mingw64 (GNU). CI overrides target per-platform.
+targets = ["x86_64-pc-windows-gnu"]

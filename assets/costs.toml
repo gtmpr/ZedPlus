@@ -1,0 +1,31 @@
+[models.claude-haiku-4-5]
+input_per_mtok = 0.80
+output_per_mtok = 4.00
+
+[models.claude-sonnet-4-6]
+input_per_mtok = 3.00
+output_per_mtok = 15.00
+
+[models.claude-opus-4-7]
+input_per_mtok = 15.00
+output_per_mtok = 75.00
+
+[models.gemini-flash-2-5]
+input_per_mtok = 0.15
+output_per_mtok = 0.60
+
+[models.gemini-pro-2-5]
+input_per_mtok = 1.25
+output_per_mtok = 5.00
+
+[models.gpt-4o-mini]
+input_per_mtok = 0.15
+output_per_mtok = 0.60
+
+[models.gpt-4o]
+input_per_mtok = 2.50
+output_per_mtok = 10.00
+
+[models.local]
+input_per_mtok = 0.00
+output_per_mtok = 0.00
