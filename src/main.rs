@@ -144,7 +144,26 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
     use std::io::Write as IoWrite;
 
     let cwd = std::env::current_dir()?;
-    let cfg = config::load(Some(&cwd))?;
+    let mut cfg = config::load(Some(&cwd))?;
+
+    let ollama_url = cfg
+        .config
+        .services
+        .ollama_url
+        .as_deref()
+        .unwrap_or("http://localhost:11434");
+
+    // If local mode is requested or cloud is disabled, run a quick discovery
+    // to sync the registry aliases with what's actually running.
+    if args.local || cfg.config.privacy.cloud_allowed == Some(false) {
+        let lmstudio_url = cfg.config.services.lmstudio_url
+            .as_deref()
+            .unwrap_or("http://localhost:1234");
+        let discovered = crate::local_models::discover(ollama_url, lmstudio_url).await;
+        if !discovered.is_empty() {
+            crate::local_models::update_registry_with_discovered(&mut cfg.models, &discovered);
+        }
+    }
 
     let decision = router::route(
         &args.query,
@@ -217,7 +236,9 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
 
         println!("\x1b[35m[editor] Applying changes...\x1b[0m");
         let editor_alias = router::rules::select_editor_alias(&cfg.config, &cfg.models);
-        let (editor_prov, editor_mid) = backends::resolve_model(&editor_alias, &cfg.models).unwrap_or(("ollama".to_string(), "llama3.2:8b".to_string()));
+        let (editor_prov, editor_mid) = backends::resolve_model(&editor_alias, &cfg.models)
+            .or_else(|| backends::resolve_model("local", &cfg.models))
+            .unwrap_or(("ollama".to_string(), "llama3.2:8b".to_string()));
         let editor_key = get_api_key(&editor_prov, &cfg).unwrap_or_default();
         let editor_backend = backends::create_backend(&editor_prov, &editor_key, ollama_url);
 
@@ -254,8 +275,10 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
             cache_hit: false,
             override_model: args.model.clone(),
             is_architect_split: true,
-        });
-
+            reward_signal: 0.0,
+            edit_accepted: false,
+            session_id: None,
+            });
         return Ok(());
     }
 
@@ -295,6 +318,9 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
                     cache_hit: false,
                     override_model: args.model.clone(),
                     is_architect_split: false,
+                    reward_signal: 0.0,
+                    edit_accepted: false,
+                    session_id: None,
                 });
             }
             Err(e) => {
@@ -400,6 +426,9 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
                         cache_hit: r.cache_hit,
                         override_model: args.model.clone(),
                         is_architect_split: false,
+                        reward_signal: 0.0,
+                        edit_accepted: false,
+                        session_id: None,
                     });
                     std::process::exit(1);
                 }
@@ -417,6 +446,9 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
                 cache_hit: r.cache_hit,
                 override_model: args.model.clone(),
                 is_architect_split: false,
+                reward_signal: 0.0,
+                edit_accepted: false,
+                session_id: None,
             });
         }
         Err(backends::BackendError::RateLimit) => {
@@ -500,6 +532,9 @@ async fn cmd_ask_with_fallback(
                 cache_hit: r.cache_hit,
                 override_model: args.model.clone(),
                 is_architect_split: false,
+                reward_signal: 0.0,
+                edit_accepted: false,
+                session_id: None,
             });
         }
         Err(e) => return Err(e.into()),
@@ -572,8 +607,11 @@ async fn cmd_search(args: cli::SearchArgs) -> Result<()> {
                 cost_usd: actual_cost,
                 cache_hit: r.cache_hit,
                 override_model: None,
-                is_architect_split: false,
-            });
+                is_architect_split: true,
+                reward_signal: 0.0,
+                edit_accepted: false,
+                session_id: None,
+                });
         }
         Err(e) => return Err(e.into()),
     }

@@ -1,19 +1,69 @@
 # ZedPlus
 
-Smart AI routing CLI with realtime code indexing, multi-provider backends, and local model distillation.
+A terminal-first AI routing CLI for developers who use multiple AI models and want them unified, context-aware, and cost-controlled.
+
+---
 
 ## What it does
 
-ZedPlus routes each query to the best AI model for the task — Claude for complex reasoning and code review, Gemini for web-grounded answers, fast local models (Ollama / LM Studio) for quick completions — and learns from your overrides over time.
+ZedPlus sits between you and several AI providers and makes routing decisions so you don't have to. You type a query, it classifies the task, picks the right model, attaches relevant code context, and streams the response. As you override its choices, it notices the patterns and adjusts.
 
-- **Smart router** — classifies queries into 7 task types and picks the right model
-- **Multi-backend** — Claude, Gemini, OpenAI, Codex, Ollama, LM Studio in one CLI
-- **Code indexer** — tree-sitter parsing with semantic search and git diff context
-- **Adaptive routing** — detects your override patterns and suggests routing changes
-- **Distillation** — logs every Q&A to JSONL for fine-tuning local models
-- **Session persistence** — auto-resumes previous sessions with named history
-- **Multi-agent brainstorm** — debate, red-team, perspectives, and Delphi strategies
-- **Architect/Editor mode** — high-quality model plans, fast model implements
+**Routing and providers**
+- Classifies queries into task types (code review, web search, reasoning, data analysis, documentation, quick completion, brainstorm) and routes each to its best-fit model
+- Supports Claude, Gemini, OpenAI, Ollama, and LM Studio — switch with `@claude`, `@gemini`, `@local`, or `--model`
+- Adaptive routing: after 5+ consistent overrides on a task type it suggests a permanent rule change
+
+**Code context**
+- Indexes your working directory with tree-sitter — functions, classes, symbols, chunks
+- Attaches semantically relevant code snippets to every query automatically
+- Pulls live `git diff` context so answers reflect your current changes, not stale file state
+
+**Multi-agent strategies**
+- `/debate`, `/red-team`, `/perspectives`, `/delphi` — runs a query across multiple models and synthesizes the responses
+- Architect/Editor mode: a high-quality model writes the plan, a fast model implements it
+
+**Training data distillation**
+- Every Q&A pair is logged to JSONL in Alpaca format
+- Filter and export by task type, date range, or quality signal
+- `zedplus train` generates a fine-tuning script for Unsloth or Axolotl against your local base model
+
+**Ergonomics**
+- Terminal REPL with session history, auto-resume, and named sessions
+- One-shot mode: `zedplus "explain this"` — no REPL required
+- `/usage` and `zedplus usage --month` show token and cost totals per provider
+
+---
+
+## What it doesn't do
+
+- **No IDE integration.** ZedPlus is a CLI. There is no VS Code extension, no inline completion, no sidebar. If you want autocomplete in your editor, use Copilot or Supermaven.
+- **Not an autonomous agent.** ZedPlus doesn't open a terminal, run tests, read error output, and loop until the code works. It answers queries and can apply code blocks to files, but it does not drive a full agentic loop the way Devin, SWE-agent, or Claude Code do, yet.
+- **Doesn't train models.** It generates JSONL and a shell script. The actual GPU training runs in Unsloth or Axolotl on your hardware. ZedPlus doesn't manage that process, yet.
+- **No shared workspaces.** Sessions and config are per-user, per-machine. There is no team dashboard, no shared prompt library, no org-level routing policy.
+- **Doesn't manage your API accounts.** You bring your own keys. ZedPlus stores them in your system keychain and uses them — it doesn't proxy requests through its own service or track your usage centrally.
+- **No GUI.** Everything is text, terminal, and config files.
+
+---
+
+## Who it's for
+
+- **Developers who already use multiple AI tools** and are tired of context-switching between Claude, Gemini, and a local model depending on the task
+- **Cost-conscious teams or solo devs** who want cloud AI quality for hard problems and local model speed for easy ones, without manually deciding every time
+- **Anyone building fine-tuned local models** who wants organic, high-quality training data generated from their own real work rather than synthetic datasets
+- **Terminal-first engineers** who find chat UIs slow and prefer composable tools they can script around
+- **Developers who want code-aware answers** without manually pasting context every time — the indexer handles that automatically
+
+---
+
+## Who it's not for
+
+- **Non-developers.** ZedPlus assumes you are writing code, running a terminal, and have at least one AI API key. There is no onboarding for general users, yet.
+- **People who want a GUI.** If you want a chat interface, use claude.ai or Gemini. ZedPlus is deliberately terminal-only.
+- **Teams wanting centralized AI governance.** There are no admin controls, audit logs, or org-level policy enforcement. It's a personal developer tool.
+- **Users who want a fully autonomous coding agent.** If your goal is "fix this bug without me touching it," you want Claude Code, Cursor Agent, or a similar autonomous system. ZedPlus augments your decisions; it doesn't replace them, yet.
+- **People happy with a single provider.** If you only use Claude and that covers everything you need, ZedPlus adds complexity without much benefit. It earns its place when you're regularly choosing between providers.
+
+---
 
 ## Install
 
@@ -38,6 +88,8 @@ zedplus update --check   # see if a newer version is available
 zedplus update           # download and install
 ```
 
+---
+
 ## Quick start
 
 ```sh
@@ -52,6 +104,8 @@ zedplus
 ```
 
 The wizard scans for installed CLIs (Claude, Gemini, Codex, Groq, Qwen, Aider), estimates routing costs, and writes `~/.config/zedplus/config.toml`.
+
+---
 
 ## REPL commands
 
@@ -79,6 +133,8 @@ The wizard scans for installed CLIs (Claude, Gemini, Codex, Groq, Qwen, Aider), 
 | `/ui [native\|claude\|gemini]` | Show or change UI style |
 | `/exit` | End session with summary |
 
+---
+
 ## One-shot commands
 
 ```sh
@@ -87,6 +143,8 @@ zedplus --explain "refactor this code"   # show routing decision
 zedplus --local "quick fix"              # force local model
 zedplus --cheap "summarize this"         # force cheapest model
 ```
+
+---
 
 ## Config
 
@@ -100,6 +158,8 @@ zedplus config --reset             # restore defaults
 
 Config is stored at `~/.config/zedplus/config.toml`. Project-level overrides go in `.zedplus.toml` in your working directory.
 
+---
+
 ## Adaptive routing
 
 ```sh
@@ -108,6 +168,8 @@ zedplus profile --optimize --apply # write suggestions to .zedplus.toml
 ```
 
 Triggers when you override the same task type 5+ times consistently.
+
+---
 
 ## Distillation and training
 
@@ -119,6 +181,8 @@ zedplus train --status             # show job history
 zedplus model import <path|id> --name my-model   # register custom model
 ```
 
+---
+
 ## Session management
 
 ```sh
@@ -128,6 +192,8 @@ zedplus session archive <id>
 zedplus resume                     # resume most recent session
 ```
 
+---
+
 ## Usage tracking
 
 ```sh
@@ -135,11 +201,9 @@ zedplus usage --today
 zedplus usage --month
 ```
 
-## Models
+---
 
-ZedPlus ships a model registry at `assets/models.toml` with quality/speed tiers and task strengths. See `zedplus config --show` for the active routing rules, or `/model` in the REPL for available aliases.
-
-Default routing:
+## Default routing
 
 | Task | Default model |
 |---|---|
@@ -149,6 +213,8 @@ Default routing:
 | Data analysis | Gemini Pro |
 | Documentation | Claude Haiku |
 | Quick completion | Local (Ollama) |
+
+---
 
 ## License
 

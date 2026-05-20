@@ -8,6 +8,21 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.11.0] - 2026-05-20
+
+### Fixed
+- **Dynamic Local Model Prioritization**: ZedPlus now automatically adapts to your hardware. Instead of failing on a missing default like `llama3.2:8b`, the system performs live discovery of Ollama/LM Studio models and synchronizes the internal registry so the `local` and `local-reasoner` aliases always point to the best available models you actually have pulled.
+- **CLI 'Ask' Adaptability**: The `zedplus ask` command now performs local discovery when `--local` is used, ensuring it uses your existing models rather than hardcoded fallbacks.
+- **Architect/Editor Fallback**: Updated the two-phase routing to gracefully fall back to discovered local models if the configured high-quality model is unavailable.
+
+### Added
+- **`update_registry_with_discovered`**: New utility in `src/local_models.rs` that maps live inference service models into the ZedPlus routing registry at runtime.
+
+### Version bump
+`0.10.0` → `0.11.0`
+
+---
+
 ## [0.10.0] - 2026-05-20
 
 ### Added

@@ -144,7 +144,7 @@ impl Session {
 
 pub async fn run(initial_query: Option<String>) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let cfg = config::load(Some(&cwd))?;
+    let mut cfg = config::load(Some(&cwd))?;
 
     let default_alias = cfg.config.routing.rules.fallback.clone();
     let (provider, model_id) = backends::resolve_model(&default_alias, &cfg.models)
@@ -165,7 +165,7 @@ pub async fn run(initial_query: Option<String>) -> Result<()> {
         }
     }
 
-    run_inner(session, initial_query, &cfg, is_tty).await
+    run_inner(session, initial_query, &mut cfg, is_tty).await
 }
 
 /// Resume a specific session by ID and name (called from `zedplus resume` and `session resume`).
@@ -178,7 +178,7 @@ pub async fn run_resumed(
     turns: Vec<Message>,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let cfg = config::load(Some(&cwd))?;
+    let mut cfg = config::load(Some(&cwd))?;
 
     let default_alias = cfg.config.routing.rules.fallback.clone();
     let (provider, model_id) = backends::resolve_model(&default_alias, &cfg.models)
@@ -197,7 +197,7 @@ pub async fn run_resumed(
     println!("Resumed '{}' — {} prior turns loaded.\n", snap.name, snap.turn_count);
 
     let is_tty = io::IsTerminal::is_terminal(&io::stdout());
-    run_inner(session, None, &cfg, is_tty).await
+    run_inner(session, None, &mut cfg, is_tty).await
 }
 
 fn try_offer_resume(
@@ -227,7 +227,7 @@ fn try_offer_resume(
 async fn run_inner(
     mut session: Session,
     initial_query: Option<String>,
-    cfg: &config::LoadedConfig,
+    cfg: &mut config::LoadedConfig,
     _is_tty: bool,
 ) -> Result<()> {
     // Fire before_session hook
@@ -280,6 +280,8 @@ async fn run_inner(
     cli.local_models = crate::local_models::discover(&ollama_url, &cli.lmstudio_url).await;
     if !cli.local_models.is_empty() {
         print_local_model_table(&cli.local_models);
+        // Sync the registry so 'local' and 'local-reasoner' aliases point to discovered models
+        crate::local_models::update_registry_with_discovered(&mut cfg.models, &cli.local_models);
     }
 
     if session.turn_count == 0 {
@@ -326,15 +328,27 @@ async fn run_inner(
         .await?;
     }
 
-    run_interactive_loop(
-        &mut session,
-        cfg,
-        &index_store,
-        if embedder_available { Some(&embedder) } else { None },
-        &ollama_url,
-        &cli,
-    )
-    .await?;
+    if _is_tty {
+        run_interactive_loop(
+            &mut session,
+            cfg,
+            &index_store,
+            if embedder_available { Some(&embedder) } else { None },
+            &ollama_url,
+            &cli,
+        )
+        .await?;
+    } else {
+        run_pipe_loop(
+            &mut session,
+            cfg,
+            &index_store,
+            if embedder_available { Some(&embedder) } else { None },
+            &ollama_url,
+            &cli,
+        )
+        .await?;
+    }
 
     // Fire after_session hook before printing exit summary
     hooks.run_warn(crate::hooks::HookPoint::AfterSession);
@@ -344,7 +358,7 @@ async fn run_inner(
 
 async fn run_interactive_loop(
     session: &mut Session,
-    cfg: &config::LoadedConfig,
+    cfg: &mut config::LoadedConfig,
     index_store: &Option<IndexStore>,
     embedder: Option<&Embedder>,
     ollama_url: &str,
@@ -370,6 +384,7 @@ async fn run_interactive_loop(
                 match &session.last_response {
                     Some(resp) => {
                         let _ = apply::apply_response(resp, &cwd);
+                        let _ = crate::distiller::mark_accepted();
                     }
                     None => println!("  No response yet. Ask a question first."),
                 }
@@ -490,10 +505,11 @@ async fn run_interactive_loop(
 
 async fn run_pipe_loop(
     session: &mut Session,
-    cfg: &config::LoadedConfig,
+    cfg: &mut config::LoadedConfig,
     index_store: &Option<IndexStore>,
     embedder: Option<&Embedder>,
     ollama_url: &str,
+    cli: &detector::CliDetection,
 ) -> Result<()> {
     use std::io::BufRead;
     let stdin = io::stdin();
@@ -561,8 +577,7 @@ async fn run_pipe_loop(
                 continue;
             }
             Some(commands::ReplInput::Query { text, flags }) => {
-                let empty_cli = detector::CliDetection::default();
-                run_turn(&text, flags, session, cfg, index_store, embedder, ollama_url, &empty_cli).await?;
+                run_turn(&text, flags, session, cfg, index_store, embedder, ollama_url, cli).await?;
             }
         }
     }
@@ -612,7 +627,7 @@ async fn run_turn(
     query: &str,
     mut flags: commands::QueryFlags,
     session: &mut Session,
-    cfg: &config::LoadedConfig,
+    cfg: &mut config::LoadedConfig,
     index_store: &Option<IndexStore>,
     embedder: Option<&Embedder>,
     ollama_url: &str,
@@ -855,7 +870,7 @@ async fn run_turn(
             Some(&system),
             &session.messages,
             backend.as_ref(),
-            &decision.model_id,
+            &active_model_id,
             4096,
             20,
             &cwd,
@@ -922,6 +937,9 @@ async fn run_turn(
                     cache_hit: false,
                     override_model: flags.model.clone(),
                     is_architect_split: false,
+                    reward_signal: 0.0,
+                    edit_accepted: false,
+                    session_id: Some(session.session_id.clone()),
                 });
 
                 // Check if the last test run (logged by agent) failed — surface /fix hint.
@@ -1113,6 +1131,9 @@ async fn run_turn(
                 cache_hit: r.cache_hit,
                 override_model: flags.model.clone(),
                 is_architect_split: false,
+                reward_signal: 0.0,
+                edit_accepted: false,
+                session_id: Some(session.session_id.clone()),
             });
         }
         Err(backends::BackendError::RateLimit) => {
@@ -1376,6 +1397,9 @@ async fn run_architect_editor_turn(
                 cache_hit: false,
                 override_model: flags.model.clone(),
                 is_architect_split: true,
+                reward_signal: 0.0,
+                edit_accepted: false,
+                session_id: Some(session.session_id.clone()),
             });
         }
         Err(e) => {
@@ -1391,22 +1415,34 @@ async fn maybe_summarize_history(
     cfg: &config::LoadedConfig,
     ollama_url: &str,
 ) {
-    if session.messages.is_empty() || session.total_message_tokens() < MAX_HISTORY_TOKENS {
+    // Threshold for summarization: 10k tokens or 20 turns
+    let token_limit = 10_000;
+    let turn_limit = 20;
+    
+    if session.messages.len() < turn_limit && session.total_message_tokens() < token_limit {
         return;
     }
+
+    // Keep the last 4 messages (2 user-assistant pairs) intact
+    let keep_count = 4;
+    if session.messages.len() <= keep_count {
+        return;
+    }
+
+    let to_summarize_count = session.messages.len() - keep_count;
+    let (to_summarize, to_keep) = session.messages.split_at(to_summarize_count);
 
     let summary_alias = cfg.config.routing.rules.fallback.clone();
     let (prov, mid) = backends::resolve_model(&summary_alias, &cfg.models)
         .unwrap_or_else(|| ("claude".to_string(), summary_alias.clone()));
 
-    let history_text: String = session
-        .messages
+    let history_text: String = to_summarize
         .iter()
         .map(|m| format!("{}: {}\n", m.role, m.content))
         .collect();
 
     let summary_prompt = format!(
-        "Summarize this conversation concisely, preserving key decisions and context:\n\n{}",
+        "Summarize this conversation context concisely, preserving key decisions, project state, and important context needed for subsequent turns. Focus on what was achieved and what the current status is:\n\n{}",
         history_text
     );
 
@@ -1424,16 +1460,19 @@ async fn maybe_summarize_history(
     };
 
     if let Ok(result) = backend.complete(opts).await {
-        session.messages.clear();
-        session.messages.push(Message {
+        let mut new_messages = Vec::new();
+        new_messages.push(Message {
             role: "user".to_string(),
-            content: format!("[Conversation summary]\n{}", result.content),
+            content: format!("[Conversation summary of prior {} turns]\n{}", to_summarize_count, result.content),
         });
-        session.messages.push(Message {
+        new_messages.push(Message {
             role: "assistant".to_string(),
-            content: "Understood. I have the prior conversation context.".to_string(),
+            content: "Understood. I have summarized the prior context and will continue with the current turns.".to_string(),
         });
-        eprintln!("[Context window approaching limit — history summarized]");
+        new_messages.extend_from_slice(to_keep);
+        
+        session.messages = new_messages;
+        eprintln!("[Context window: semantically compressed {} older turns]", to_summarize_count);
     }
 }
 

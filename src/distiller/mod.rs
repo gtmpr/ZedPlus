@@ -19,6 +19,9 @@ pub struct DistillEntry {
     pub cache_hit: bool,
     pub override_model: Option<String>,
     pub is_architect_split: bool,
+    pub reward_signal: f64,
+    pub edit_accepted: bool,
+    pub session_id: Option<String>,
 }
 
 /// Append an Alpaca-format JSONL line and write a usage row to SQLite.
@@ -29,6 +32,28 @@ pub fn record(entry: DistillEntry) -> Result<()> {
     write_jsonl(&entry, ts, &now)?;
     write_usage(&entry, ts)?;
 
+    Ok(())
+}
+
+/// Update the reward signal for the most recent usage row.
+pub fn update_reward(reward: f64) -> Result<()> {
+    let db_path = crate::platform::dirs::db_file()?;
+    let conn = crate::db::open(&db_path)?;
+    conn.execute(
+        "UPDATE usage SET reward_signal = ?1 WHERE id = (SELECT MAX(id) FROM usage)",
+        params![reward],
+    )?;
+    Ok(())
+}
+
+/// Mark the most recent usage row as accepted.
+pub fn mark_accepted() -> Result<()> {
+    let db_path = crate::platform::dirs::db_file()?;
+    let conn = crate::db::open(&db_path)?;
+    conn.execute(
+        "UPDATE usage SET edit_accepted = 1, reward_signal = reward_signal + 0.5 WHERE id = (SELECT MAX(id) FROM usage)",
+        [],
+    )?;
     Ok(())
 }
 
@@ -114,6 +139,7 @@ fn write_jsonl(entry: &DistillEntry, ts: i64, now: &chrono::DateTime<Utc>) -> Re
         "output": entry.response,
         "model": entry.model_key,
         "task_type": entry.task_type,
+        "session_id": entry.session_id,
         "ts": ts,
     });
 
@@ -142,8 +168,8 @@ fn write_usage(entry: &DistillEntry, ts: i64) -> Result<()> {
     let negative_signal = last_ts.map(|t| ts - t < 30).unwrap_or(false) as i32;
 
     conn.execute(
-        "INSERT INTO usage (ts, model, task_type, input_tokens, output_tokens, cost_usd, cache_hit, override_model, negative_signal, is_architect_split)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO usage (ts, model, task_type, input_tokens, output_tokens, cost_usd, cache_hit, override_model, negative_signal, is_architect_split, reward_signal, edit_accepted, session_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             ts,
             entry.model_key,
@@ -155,6 +181,9 @@ fn write_usage(entry: &DistillEntry, ts: i64) -> Result<()> {
             entry.override_model,
             negative_signal,
             entry.is_architect_split as i32,
+            entry.reward_signal,
+            entry.edit_accepted as i32,
+            entry.session_id,
         ],
     )?;
 

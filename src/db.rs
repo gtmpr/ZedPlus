@@ -22,6 +22,10 @@ fn run_migrations(conn: &Connection) {
     let _ = conn.execute_batch("ALTER TABLE bench_results ADD COLUMN format_correct INTEGER DEFAULT 1;");
     // Phase 13: link test_runs to the model that triggered them
     let _ = conn.execute_batch("ALTER TABLE test_runs ADD COLUMN model_key TEXT;");
+    // Phase 10: Reward signals for reinforcement learning
+    let _ = conn.execute_batch("ALTER TABLE usage ADD COLUMN reward_signal REAL DEFAULT 0.0;");
+    let _ = conn.execute_batch("ALTER TABLE usage ADD COLUMN edit_accepted INTEGER DEFAULT 0;");
+    let _ = conn.execute_batch("ALTER TABLE usage ADD COLUMN session_id TEXT;");
 }
 
 fn init_schema(conn: &Connection) -> Result<()> {

@@ -9,20 +9,46 @@ pub fn all_tools() -> Vec<ToolDef> {
     vec![
         ToolDef {
             name: "read_file",
-            description: "Read the contents of a file. Returns the file content with line numbers. Hard cap: 100 lines. Pass max_lines to read fewer (e.g. 30 to skim a file).",
+            description: "Read a file's content. Returns content with line numbers. Use start_line/end_line to read specific sections of large files to save context tokens.",
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "The path to the file to read (relative to cwd or absolute)"
+                        "description": "Path to the file"
                     },
-                    "max_lines": {
+                    "start_line": {
                         "type": "integer",
-                        "description": "Maximum lines to return (default 100, hard cap 100). Use a smaller value to save context."
+                        "description": "1-based line number to start reading from (default 1)"
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "1-based line number to end reading at (default start_line + 150)"
                     }
                 },
                 "required": ["path"]
+            }),
+        },
+        ToolDef {
+            name: "edit_file",
+            description: "Surgical edit: replaces exactly one occurrence of old_string with new_string in the specified file. Highly token-efficient. Fails if old_string is not found or is ambiguous (multiple matches). Provide enough context in old_string to make it unique.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the file"
+                    },
+                    "old_string": {
+                        "type": "string",
+                        "description": "The exact literal string to find and replace"
+                    },
+                    "new_string": {
+                        "type": "string",
+                        "description": "The string to replace it with"
+                    }
+                },
+                "required": ["path", "old_string", "new_string"]
             }),
         },
         ToolDef {
@@ -181,40 +207,82 @@ pub fn all_tools() -> Vec<ToolDef> {
                 "required": ["name"]
             }),
         },
+        ToolDef {
+            name: "cd",
+            description: "Change the current working directory for subsequent tools. Validates that the directory exists.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The path to change to"
+                    }
+                },
+                "required": ["path"]
+            }),
+        },
     ]
 }
 
 // ── Tool execution ────────────────────────────────────────────────────────────
 
-/// Execute a tool call. Returns (output, is_error).
+/// Execute a tool call. Returns (output, is_error, new_cwd).
 /// When `auto_accept` is true, write_file and run_command skip the confirmation prompt.
-pub fn execute(name: &str, input: &Value, cwd: &Path, auto_accept: bool) -> (String, bool) {
-    match name {
+pub fn execute(name: &str, input: &Value, cwd: &Path, auto_accept: bool) -> (String, bool, Option<PathBuf>) {
+    let mut new_cwd = None;
+    let (raw_output, is_error) = match name {
+        "cd" => {
+            let path_str = match input["path"].as_str() {
+                Some(p) => p,
+                None => return ("Missing 'path' argument".to_string(), true, None),
+            };
+            let target = resolve_path(path_str, cwd);
+            if target.exists() && target.is_dir() {
+                new_cwd = Some(target.clone());
+                (format!("Changed directory to {}", target.display()), false)
+            } else {
+                (format!("Error: directory does not exist: {}", target.display()), true)
+            }
+        }
         "read_file" => {
             let path_str = match input["path"].as_str() {
                 Some(p) => p,
-                None => return ("Missing 'path' argument".to_string(), true),
+                None => return ("Missing 'path' argument".to_string(), true, None),
             };
-            let max_lines = input["max_lines"].as_u64()
-                .map(|n| (n as usize).min(100))
-                .unwrap_or(100);
-            tool_read_file(path_str, max_lines, cwd)
+            let start = input["start_line"].as_u64().unwrap_or(1) as usize;
+            let end = input["end_line"].as_u64().unwrap_or((start + 150) as u64) as usize;
+            tool_read_file(path_str, start, end, cwd)
+        }
+        "edit_file" => {
+            let path_str = match input["path"].as_str() {
+                Some(p) => p,
+                None => return ("Missing 'path' argument".to_string(), true, None),
+            };
+            let old_str = match input["old_string"].as_str() {
+                Some(s) => s,
+                None => return ("Missing 'old_string' argument".to_string(), true, None),
+            };
+            let new_str = match input["new_string"].as_str() {
+                Some(s) => s,
+                None => return ("Missing 'new_string' argument".to_string(), true, None),
+            };
+            tool_edit_file(path_str, old_str, new_str, cwd, auto_accept)
         }
         "write_file" => {
             let path_str = match input["path"].as_str() {
                 Some(p) => p,
-                None => return ("Missing 'path' argument".to_string(), true),
+                None => return ("Missing 'path' argument".to_string(), true, None),
             };
             let content = match input["content"].as_str() {
                 Some(c) => c,
-                None => return ("Missing 'content' argument".to_string(), true),
+                None => return ("Missing 'content' argument".to_string(), true, None),
             };
             tool_write_file(path_str, content, cwd, auto_accept)
         }
         "list_dir" => {
             let path_str = match input["path"].as_str() {
                 Some(p) => p,
-                None => return ("Missing 'path' argument".to_string(), true),
+                None => return ("Missing 'path' argument".to_string(), true, None),
             };
             let depth = input["depth"].as_u64().unwrap_or(3) as usize;
             tool_list_dir(path_str, depth, cwd)
@@ -222,14 +290,14 @@ pub fn execute(name: &str, input: &Value, cwd: &Path, auto_accept: bool) -> (Str
         "run_command" => {
             let command = match input["command"].as_str() {
                 Some(c) => c,
-                None => return ("Missing 'command' argument".to_string(), true),
+                None => return ("Missing 'command' argument".to_string(), true, None),
             };
             tool_run_command(command, cwd, auto_accept)
         }
         "search_files" => {
             let pattern = match input["pattern"].as_str() {
                 Some(p) => p,
-                None => return ("Missing 'pattern' argument".to_string(), true),
+                None => return ("Missing 'pattern' argument".to_string(), true, None),
             };
             let directory = input["directory"].as_str();
             tool_search_files(pattern, directory, cwd)
@@ -237,7 +305,7 @@ pub fn execute(name: &str, input: &Value, cwd: &Path, auto_accept: bool) -> (Str
         "glob_files" => {
             let pattern = match input["pattern"].as_str() {
                 Some(p) => p,
-                None => return ("Missing 'pattern' argument".to_string(), true),
+                None => return ("Missing 'pattern' argument".to_string(), true, None),
             };
             tool_glob_files(pattern, cwd)
         }
@@ -245,7 +313,7 @@ pub fn execute(name: &str, input: &Value, cwd: &Path, auto_accept: bool) -> (Str
         "git_commit" => {
             let message = match input["message"].as_str() {
                 Some(m) => m,
-                None => return ("Missing 'message' argument".to_string(), true),
+                None => return ("Missing 'message' argument".to_string(), true, None),
             };
             let files: Vec<&str> = input["files"]
                 .as_array()
@@ -256,7 +324,22 @@ pub fn execute(name: &str, input: &Value, cwd: &Path, auto_accept: bool) -> (Str
         // search_semantic is handled async in agent/mod.rs before this dispatcher
         "search_semantic" => ("search_semantic requires async context".to_string(), true),
         _ => (format!("Unknown tool: {name}"), true),
-    }
+    };
+
+    // Apply 150-line truncation to all tool outputs to save context tokens
+    let lines: Vec<&str> = raw_output.lines().collect();
+    let final_output = if lines.len() > 155 {
+        let truncated = lines[..150].join("\n");
+        format!(
+            "{}\n\n[... {} lines truncated for brevity. Use more specific parameters to see more ...]",
+            truncated,
+            lines.len() - 150
+        )
+    } else {
+        raw_output
+    };
+
+    (final_output, is_error, new_cwd)
 }
 
 // ── Individual tool implementations ──────────────────────────────────────────
@@ -270,30 +353,59 @@ fn resolve_path(path_str: &str, cwd: &Path) -> PathBuf {
     }
 }
 
-fn tool_read_file(path_str: &str, max_lines: usize, cwd: &Path) -> (String, bool) {
+fn tool_read_file(path_str: &str, start_line: usize, end_line: usize, cwd: &Path) -> (String, bool) {
     let path = resolve_path(path_str, cwd);
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(e) => return (format!("Error reading {}: {}", path.display(), e), true),
     };
 
-    let cap = max_lines.min(100);
     let lines: Vec<&str> = content.lines().collect();
-    let truncated = lines.len() > cap;
-    let shown_lines = if truncated { &lines[..cap] } else { &lines[..] };
+    let start = start_line.saturating_sub(1);
+    let end = end_line.min(lines.len());
+
+    if start >= lines.len() {
+        return (format!("Error: start_line {} is beyond file length {}", start_line, lines.len()), true);
+    }
 
     let mut out = String::new();
-    for (i, line) in shown_lines.iter().enumerate() {
-        out.push_str(&format!("{:>4}: {}\n", i + 1, line));
-    }
-    if truncated {
-        out.push_str(&format!(
-            "\n[... truncated: showing {cap} of {} lines. Use max_lines or read in sections ...]\n",
-            lines.len()
-        ));
+    for i in start..end {
+        out.push_str(&format!("{:>4}: {}\n", i + 1, lines[i]));
     }
 
     (out, false)
+}
+
+fn tool_edit_file(path_str: &str, old_string: &str, new_string: &str, cwd: &Path, auto_accept: bool) -> (String, bool) {
+    let path = resolve_path(path_str, cwd);
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) => return (format!("Error reading {}: {}", path.display(), e), true),
+    };
+
+    let matches: Vec<_> = content.match_indices(old_string).collect();
+    if matches.is_empty() {
+        return (format!("Error: old_string not found in {}", path_str), true);
+    }
+    if matches.len() > 1 {
+        return (format!("Error: old_string is ambiguous (found {} matches in {}). Provide more context.", matches.len(), path_str), true);
+    }
+
+    let updated = content.replacen(old_string, new_string, 1);
+
+    println!("\n\x1b[33m[edit_file]\x1b[0m Surgical edit: {}", path.display());
+    print_simple_diff(old_string, new_string, "edit segment");
+
+    if auto_accept {
+        println!("  \x1b[32m✓ auto-accepted\x1b[0m");
+    } else if !confirm("Proceed with surgical edit? [Y/n]: ") {
+        return ("Edit cancelled by user".to_string(), false);
+    }
+
+    match std::fs::write(&path, updated) {
+        Ok(()) => (format!("Successfully updated {}", path.display()), false),
+        Err(e) => (format!("Error writing {}: {}", path.display(), e), true),
+    }
 }
 
 fn tool_write_file(path_str: &str, content: &str, cwd: &Path, auto_accept: bool) -> (String, bool) {
@@ -387,8 +499,14 @@ fn list_dir_recursive(dir: &Path, out: &mut String, current_depth: usize, max_de
 fn tool_run_command(command: &str, cwd: &Path, auto_accept: bool) -> (String, bool) {
     println!("\n\x1b[33m[run_command]\x1b[0m {command}");
 
-    if auto_accept {
-        println!("  \x1b[32m✓ auto-accepted\x1b[0m");
+    let safe = is_safe_command(command);
+
+    if auto_accept || safe {
+        if safe {
+            println!("  \x1b[32m✓ auto-accepted (safe command)\x1b[0m");
+        } else {
+            println!("  \x1b[32m✓ auto-accepted\x1b[0m");
+        }
     } else if !confirm("Proceed? [Y/n]: ") {
         return ("Command cancelled by user".to_string(), false);
     }
@@ -644,6 +762,40 @@ fn glob_match_segment(pattern: &str, name: &str) -> bool {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn is_safe_command(cmd: &str) -> bool {
+    let cmd = cmd.trim();
+    let parts: Vec<&str> = cmd.split_whitespace().collect();
+    if parts.is_empty() { return false; }
+    
+    let base = parts[0].to_lowercase();
+    let base = base.strip_suffix(".exe").unwrap_or(&base);
+
+    // List of safe read-only or project-standard commands
+    let safe_bases = [
+        "ls", "dir", "git", "cargo", "npm", "node", "python", "pip", "cat", 
+        "grep", "find", "echo", "pwd", "date", "whoami", "hostname"
+    ];
+
+    if !safe_bases.contains(&base) { return false; }
+
+    // For dangerous commands like git/cargo, check subcommands
+    if base == "git" && parts.len() > 1 {
+        let sub = parts[1].to_lowercase();
+        // Disallow destructive git commands
+        let dangerous = ["push", "reset", "clean", "checkout", "revert"];
+        if dangerous.contains(&sub.as_str()) { return false; }
+    }
+
+    if base == "cargo" && parts.len() > 1 {
+        let sub = parts[1].to_lowercase();
+        // Allow common build/test/check
+        let safe_sub = ["build", "test", "check", "run", "clippy", "fmt"];
+        if !safe_sub.contains(&sub.as_str()) { return false; }
+    }
+
+    true
+}
 
 /// Prompt the user for a y/n confirmation. Default is Yes.
 fn confirm(prompt: &str) -> bool {

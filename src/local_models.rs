@@ -60,6 +60,64 @@ pub async fn discover(ollama_url: &str, lmstudio_url: &str) -> Vec<DiscoveredMod
     all
 }
 
+/// Update a model registry with discovered models.
+/// Adds discovered models as new entries and updates 'local' and 'local-reasoner' aliases.
+pub fn update_registry_with_discovered(
+    registry: &mut crate::config::models::ModelRegistry,
+    discovered: &[DiscoveredModel],
+) {
+    if discovered.is_empty() {
+        return;
+    }
+
+    // Add each discovered model as a specific alias
+    for m in discovered {
+        let alias = format!("{}-{}", m.provider, m.id.replace(':', "-"));
+        registry.models.insert(
+            alias,
+            crate::config::models::ModelCapabilities {
+                provider: m.provider.to_string(),
+                id: m.id.clone(),
+                context_window: 128_000, // Reasonable default for modern local models
+                supports_search_grounding: false,
+                supports_vision: false,
+                supports_pdf: false,
+                supports_cache: false,
+                supports_reasoning: m.reasoning_score >= 3,
+                quality_tier: m.quality_tier,
+                speed_tier: m.speed_tier,
+                strengths: if m.is_coder {
+                    vec!["code_review".into(), "quick_completion".into()]
+                } else {
+                    vec!["documentation".into(), "quick_completion".into()]
+                },
+                weaknesses: vec![],
+                is_local: true,
+            },
+        );
+    }
+
+    // Update 'local' to the best execution/general model
+    if let Some(best) = best_for_execution(discovered) {
+        if let Some(m) = registry.models.get_mut("local") {
+            m.id = best.id.clone();
+            m.provider = best.provider.to_string();
+            m.quality_tier = best.quality_tier;
+            m.speed_tier = best.speed_tier;
+        }
+    }
+
+    // Update 'local-reasoner' to the best reasoning model
+    if let Some(best) = best_for_reasoning(discovered) {
+        if let Some(m) = registry.models.get_mut("local-reasoner") {
+            m.id = best.id.clone();
+            m.provider = best.provider.to_string();
+            m.quality_tier = best.quality_tier;
+            m.speed_tier = best.speed_tier;
+        }
+    }
+}
+
 /// Return the best model for a reasoning phase (largest general model).
 pub fn best_for_reasoning(models: &[DiscoveredModel]) -> Option<&DiscoveredModel> {
     models.iter().max_by_key(|m| m.reasoning_score)

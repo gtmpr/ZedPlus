@@ -302,6 +302,24 @@ pub async fn run(
     // Add the user's query
     agent_messages.push(AgentMessage::user_text(query));
 
+    // Semantic retrieval as middleware: Automatically search for relevant context 
+    // before the model even starts its turn.
+    if let Ok(chunks) = crate::indexer::similarity_search(query, 3, ollama_url).await {
+        if !chunks.is_empty() {
+            let mut context = String::from("### Semantic Context (Automatic Retrieval)\n");
+            for chunk in chunks {
+                context.push_str(&format!(
+                    "File: {} :: {}\n{}\n\n",
+                    chunk.file_path,
+                    chunk.symbol.as_deref().unwrap_or("(file)"),
+                    chunk.content
+                ));
+            }
+            agent_messages.push(AgentMessage::user_text(&context));
+            println!("\x1b[90m[agent] Auto-retrieved relevant code context.\x1b[0m");
+        }
+    }
+
     let all_tools = tools::all_tools();
     let mut accumulated_text = String::new();
     let mut total_input = 0u32;
@@ -313,6 +331,7 @@ pub async fn run(
 let mut tools_executed = 0u32;
 let mut retry_count = 0u32;
 let mut last_model_id = model_id.to_string();
+let mut active_cwd = cwd.to_path_buf();
 
 for step in 0..max_steps {
     if cancel.load(Ordering::Relaxed) {
@@ -391,20 +410,25 @@ for step in 0..max_steps {
                     (res, err)
                 }
                 _ => {
-                    let res = tools::execute(&tc.name, &tc.input, cwd, auto_accept);
+                    let res = tools::execute(&tc.name, &tc.input, &active_cwd, auto_accept);
+                    if let Some(new_path) = res.2 {
+                        active_cwd = new_path;
+                    }
                     // Trigger tests if file was written
-                    if tc.name == "write_file" && !res.1 {
-                        let test_res = crate::tester::runner::run_background_tests(cwd.to_path_buf(), "agent".to_string(), Some(model_id.to_string())).await;
+                    if (tc.name == "write_file" || tc.name == "edit_file") && !res.1 {
+                        let test_res = crate::tester::runner::run_background_tests(active_cwd.clone(), "agent".to_string(), Some(model_id.to_string())).await;
                         if let Ok(tr) = test_res {
                             if !tr.passed {
                                 retry_count += 1;
+                                let _ = crate::distiller::update_reward(-1.0);
                                 (format!("FILE WRITTEN SUCCESSFULLY, BUT TESTS FAILED:\n\n{}", tr.stderr), true)
                             } else {
                                 retry_count = 0; // Reset on success
-                                res
+                                let _ = crate::distiller::update_reward(1.0);
+                                (res.0, res.1)
                             }
-                        } else { res }
-                    } else { res }
+                        } else { (res.0, res.1) }
+                    } else { (res.0, res.1) }
                 }
             };
 
