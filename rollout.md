@@ -344,21 +344,21 @@ Mysti optimises the **answer quality** for a single query by using multiple mode
 
 ---
 
-## Phase 12b — ZEDPLUS.md, Hooks, Shell Mode, Headless (Week 13–14)
+## Phase 12b — ZEDPLUS.md, Hooks, Shell Mode, Headless ✅ COMPLETE (v0.10.0)
 
 **Goal:** Project context file, automation hooks, shell command generation, CI mode.
 
-- [ ] `context/zedplusmd.rs` — walk directories upward from cwd to find `ZEDPLUS.md`; parse and prepend to system prompt
-- [ ] `zedplus init --context` — scaffold a `ZEDPLUS.md` from the codebase index
-- [x] `hooks/mod.rs` — `HookRunner` skeleton; `[hooks]` config schema defined
-- [ ] Eight hook points: `before_apply_change`, `after_apply_change`, `before_commit`, `after_commit`, `before_session`, `after_session`, `before_search`, `before_cloud_send`
-- [ ] `shell/mod.rs` — `zedplus shell "<description>"`: classify as shell task, generate command, display, `[Y/n/edit]`, execute
-- [ ] `shell/integration.rs` — bash/zsh/fish hotkey snippets; `zedplus shell --install-hotkey`
-- [x] Headless mode: detect non-TTY stdout; suppress prompts; `run_pipe_loop()` exists
-- [ ] `--output json` and `--output plain` flags for scripted use
-- [ ] `--exit-code` flag: exit 1 if response contains detected warnings/errors (CI gate)
+- [x] `context/zedplusmd.rs` — walk directories upward from cwd to find `ZEDPLUS.md`; inject into every system prompt under `## Project Context`
+- [x] `zedplus init --context` — scaffold a `ZEDPLUS.md` from the codebase index (language breakdown, key files, README/CHANGELOG excerpts, directory structure)
+- [x] `hooks/mod.rs` — full `HookRunner` with `run()` and `run_warn()` methods; `[hooks]` config schema with all 8 points
+- [x] Eight hook points: `before_apply_change`, `after_apply_change`, `before_commit`, `after_commit`, `before_session`, `after_session`, `before_search`, `before_cloud_send`; wired into REPL session start/end and apply_response
+- [x] `shell/mod.rs` — `zedplus shell "<description>"`: AI generates OS-aware command, displays it, `[Y/n/e(dit)]` confirm, executes
+- [x] `shell/integration.rs` — bash/zsh/fish hotkey snippets (Ctrl+Z); `zedplus shell --install-hotkey` appends to RC file idempotently
+- [x] Headless mode: non-TTY detection; `run_pipe_loop()` suppresses prompts
+- [x] `--output json` and `--output plain` flags for `zedplus ask` (scripted use)
+- [x] `--exit-code` flag: exits 1 when AI response contains error/warning/failed (CI gate)
 
-**Milestone:** `ZEDPLUS.md` injected at session start. Pre-commit hook blocks on test failure. `zedplus shell "..."` generates and runs a shell command.
+**Milestone:** `ZEDPLUS.md` injected at session start. Pre-commit hook runs on apply. `zedplus shell "..."` generates and runs a shell command. `zedplus ask "..." --output json --exit-code` works as a CI gate.
 
 ---
 
@@ -475,16 +475,16 @@ Phase 1  (Foundation) ✅
                     │     │           │     └─→ Phase 16 (Community Ecosystem)
                     │     └─→ Phase 11 (Update System) ✅
                     └─→ Phase 12 (Polish + Release) ✅ v0.8.0
-                          ├─→ Phase 12b (ZEDPLUS.md, Hooks, Shell)
+                          ├─→ Phase 12b (ZEDPLUS.md, Hooks, Shell) ✅ v0.10.0
                           ├─→ Phase 12c (Architect/Editor Mode) ✅ v0.8.1
                           └─→ Phase 13 (Background Test Runner) ✅ v0.9.0
 ```
 
 **First usable product:** ✅ Complete as of v0.6.x — `zedplus ask` works end-to-end with routing, streaming, distillation, sessions, and agentic mode.
 
-**Polish complete:** ✅ v0.9.0 — config management, unit tests, README, architect/editor routing, and test runner wired.
+**Polish complete:** ✅ v0.10.0 — config management, unit tests, README, architect/editor routing, test runner, ZEDPLUS.md context, hooks, shell command generation, CI output flags.
 
-**MVP for public launch:** Phase 12b + Phase 15 — ZEDPLUS.md context injection, hooks, multimodal inputs, skill packs.
+**MVP for public launch:** Phase 15 — multimodal inputs, goal anchoring, skill packs.
 
 **Full v1 feature complete:** End of Phase 15 (~week 18).
 

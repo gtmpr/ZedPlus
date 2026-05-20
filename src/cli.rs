@@ -361,14 +361,14 @@ pub struct UpdateArgs {
 
 #[derive(Args)]
 pub struct ShellArgs {
-    /// Natural language description of the command
-    pub description: String,
+    /// Natural language description of the command to generate
+    pub description: Option<String>,
 
-    /// Return just the command string (for shell integration)
+    /// Return just the command string without prompting (for shell integration)
     #[arg(long)]
     pub inline: bool,
 
-    /// Install shell hotkey integration
+    /// Install shell hotkey integration (Ctrl+Z) for bash/zsh/fish
     #[arg(long)]
     pub install_hotkey: bool,
 }

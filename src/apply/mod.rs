@@ -249,6 +249,12 @@ pub fn apply_interactive(block: &CodeBlock, cwd: &Path) -> Result<Option<ApplyRe
 /// Extract blocks from a response and interactively apply each one.
 /// Returns the number of files written.
 pub fn apply_response(response: &str, cwd: &Path) -> Result<usize> {
+    // Fire before_apply_change hook — load config to get hook command
+    if let Ok(cfg) = crate::config::load(Some(cwd)) {
+        let hooks = crate::hooks::HookRunner::new(&cfg.config.hooks);
+        hooks.run_warn(crate::hooks::HookPoint::BeforeApplyChange);
+    }
+
     let blocks = extract_blocks(response);
 
     // Filter to blocks that have a path or where language makes sense to apply
@@ -287,6 +293,10 @@ pub fn apply_response(response: &str, cwd: &Path) -> Result<usize> {
 
     if written > 0 {
         println!("\n  Applied {written} file(s).");
+        if let Ok(cfg) = crate::config::load(Some(cwd)) {
+            let hooks = crate::hooks::HookRunner::new(&cfg.config.hooks);
+            hooks.run_warn(crate::hooks::HookPoint::AfterApplyChange);
+        }
     }
     Ok(written)
 }

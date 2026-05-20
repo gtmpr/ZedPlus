@@ -117,7 +117,13 @@ async fn main() -> Result<()> {
         }
 
         Some(Command::Shell(args)) => {
-            shell::run(&args.description, args.inline).await?;
+            if args.install_hotkey {
+                shell::integration::install_hotkey_interactive()?;
+            } else if let Some(desc) = &args.description {
+                shell::run(desc, args.inline).await?;
+            } else {
+                eprintln!("Usage: zedplus shell \"<description>\"  or  zedplus shell --install-hotkey");
+            }
         }
 
         Some(Command::Session(args)) => {
@@ -327,7 +333,10 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
         auto_accept: false,
     };
 
-    let stream = !args.no_stream;
+    // Non-terminal output formats require collecting the full response before printing
+    let force_no_stream = matches!(args.output.as_str(), "json" | "plain");
+    let stream = !args.no_stream && !force_no_stream;
+
     let result = if stream {
         backend
             .complete_streaming(
@@ -344,18 +353,58 @@ async fn cmd_ask(args: cli::AskArgs) -> Result<()> {
 
     match result {
         Ok(r) => {
-            if stream {
-                println!();
-            } else {
-                println!("{}", r.content);
+            let actual_cost =
+                cfg.costs.cost_usd(&decision.model_id, r.input_tokens, r.output_tokens);
+
+            match args.output.as_str() {
+                "json" => {
+                    let json = serde_json::json!({
+                        "query":        args.query,
+                        "response":     r.content,
+                        "model_key":    decision.model_key,
+                        "model_id":     decision.model_id,
+                        "task_type":    decision.task_type.as_str(),
+                        "input_tokens": r.input_tokens,
+                        "output_tokens":r.output_tokens,
+                        "cost_usd":     actual_cost,
+                        "cache_hit":    r.cache_hit,
+                    });
+                    println!("{json}");
+                }
+                "plain" => println!("{}", r.content),
+                _ => {
+                    // terminal: already streamed or not yet printed
+                    if !stream { println!("{}", r.content); }
+                    else { println!(); }
+                }
             }
-            // Phase 11: apply code blocks to files if --apply flag is set
+
             if args.apply {
                 let cwd = std::env::current_dir()?;
                 let _ = apply::apply_response(&r.content, &cwd);
             }
-            let actual_cost =
-                cfg.costs.cost_usd(&decision.model_id, r.input_tokens, r.output_tokens);
+
+            // --exit-code: exit 1 when response signals an error or warning
+            if args.exit_code {
+                let lower = r.content.to_lowercase();
+                if lower.contains("error") || lower.contains("warning") || lower.contains("failed") {
+                    let _ = distiller::record(distiller::DistillEntry {
+                        query: args.query.clone(),
+                        response: r.content,
+                        model_key: decision.model_key.clone(),
+                        model_id: decision.model_id.clone(),
+                        task_type: decision.task_type.as_str().to_string(),
+                        input_tokens: r.input_tokens,
+                        output_tokens: r.output_tokens,
+                        cost_usd: actual_cost,
+                        cache_hit: r.cache_hit,
+                        override_model: args.model.clone(),
+                        is_architect_split: false,
+                    });
+                    std::process::exit(1);
+                }
+            }
+
             let _ = distiller::record(distiller::DistillEntry {
                 query: args.query.clone(),
                 response: r.content,

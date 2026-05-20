@@ -1,5 +1,6 @@
 pub mod locale;
 pub mod project;
+pub mod zedplusmd;
 
 use crate::config::schema::Config;
 use locale::LocaleContext;
@@ -29,8 +30,17 @@ impl<'a> SystemPromptBuilder<'a> {
             }
         };
 
-        format!(
-            "{prefix}\n{scope_instruction}\n"
-        )
+        let mut prompt = format!("{prefix}\n{scope_instruction}\n");
+
+        // Inject ZEDPLUS.md project context when present
+        if let Some(zmd) = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| zedplusmd::load(&cwd))
+        {
+            prompt.push_str("\n\n## Project Context (ZEDPLUS.md)\n\n");
+            prompt.push_str(&zmd);
+        }
+
+        prompt
     }
 }

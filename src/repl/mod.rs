@@ -230,6 +230,10 @@ async fn run_inner(
     cfg: &config::LoadedConfig,
     _is_tty: bool,
 ) -> Result<()> {
+    // Fire before_session hook
+    let hooks = crate::hooks::HookRunner::new(&cfg.config.hooks);
+    hooks.run_warn(crate::hooks::HookPoint::BeforeSession);
+
     let index_store = dirs::db_file()
         .ok()
         .and_then(|p| IndexStore::open(&p).ok());
@@ -332,6 +336,8 @@ async fn run_inner(
     )
     .await?;
 
+    // Fire after_session hook before printing exit summary
+    hooks.run_warn(crate::hooks::HookPoint::AfterSession);
     print_exit_summary(&session);
     Ok(())
 }

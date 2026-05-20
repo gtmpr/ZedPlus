@@ -8,6 +8,23 @@ Format: [Semantic Versioning](https://semver.org). Increment rules:
 
 ---
 
+## [0.10.0] - 2026-05-20
+
+### Added
+- **ZEDPLUS.md context injection**: `context/zedplusmd.rs` walks upward from cwd to find `ZEDPLUS.md`; when found, its content is appended to every system prompt under `## Project Context (ZEDPLUS.md)`. `zedplus init --context` scaffolds the file from the codebase index (existing feature, now wired).
+- **Hooks system** (`hooks/mod.rs`): 8 hook points (`before_apply_change`, `after_apply_change`, `before_commit`, `after_commit`, `before_session`, `after_session`, `before_search`, `before_cloud_send`). Each hook runs a shell command configured in `[hooks]` config. Failures print a warning without aborting. Wired into: REPL session start/end, apply_response.
+- **`zedplus shell "<description>"`**: AI generates a shell command from natural language, streams it to terminal, prompts `[Y/n/e(dit)]`, then executes. Uses cheapest available model. OS-aware (Windows cmd/PowerShell, macOS, Linux).
+- **`zedplus shell --inline`**: prints only the generated command — no prompt, no execution. For use in shell pipelines and scripts.
+- **`zedplus shell --install-hotkey`**: installs a `Ctrl+Z` shell hotkey in `~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish` depending on `$SHELL`. Idempotent — skips if already installed.
+- **`zedplus ask --output json`**: emits a JSON object with `query`, `response`, `model_key`, `model_id`, `task_type`, `input_tokens`, `output_tokens`, `cost_usd`, `cache_hit`. Streaming is suppressed; full response is collected first.
+- **`zedplus ask --output plain`**: prints only the response text with no formatting.
+- **`zedplus ask --exit-code`**: exits 1 if the AI response contains `error`, `warning`, or `failed` (case-insensitive). Useful as a CI gate.
+
+### Version bump
+`0.9.0` → `0.10.0`
+
+---
+
 ## [0.9.0] - 2026-05-20
 
 ### Added
