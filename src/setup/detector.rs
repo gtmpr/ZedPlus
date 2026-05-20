@@ -111,6 +111,9 @@ pub struct CliDetection {
     pub local_models: Vec<crate::local_models::DiscoveredModel>,
     pub openai_cli: bool,
     pub openai_bin: String,
+    /// OpenAI Codex CLI (`codex` binary) detected
+    pub codex_cli: bool,
+    pub codex_bin: String,
     pub groq: bool,
     pub groq_bin: String,
     pub qwen: bool,
@@ -131,6 +134,8 @@ impl Default for CliDetection {
             local_models: Vec::new(),
             openai_cli: false,
             openai_bin: String::new(),
+            codex_cli: false,
+            codex_bin: String::new(),
             groq: false,
             groq_bin: String::new(),
             qwen: false,
@@ -162,6 +167,12 @@ pub fn detect_cli_tools() -> CliDetection {
         (false, String::new())
     };
 
+    let (codex_cli, codex_bin) = if probe_bin("codex") {
+        (true, "codex".to_string())
+    } else {
+        (false, String::new())
+    };
+
     let (groq, groq_bin) = if probe_bin("groq") {
         (true, "groq".to_string())
     } else {
@@ -186,6 +197,7 @@ pub fn detect_cli_tools() -> CliDetection {
         lmstudio_url: "http://localhost:1234".into(),
         local_models: Vec::new(),
         openai_cli, openai_bin,
+        codex_cli, codex_bin,
         groq, groq_bin,
         qwen, qwen_bin,
         aider, aider_bin,

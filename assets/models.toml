@@ -88,6 +88,37 @@ strengths = ["code_review", "complex_reasoning", "documentation"]
 weaknesses = ["web_search"]
 is_local = false
 
+# OpenAI Codex CLI models — best-in-class for code tasks
+[models.codex-mini]
+provider = "openai"
+id = "codex-mini-latest"
+context_window = 200_000
+supports_search_grounding = false
+supports_vision = false
+supports_pdf = false
+supports_cache = false
+supports_reasoning = true
+quality_tier = 4
+speed_tier = 5
+strengths = ["code_review", "quick_completion", "documentation"]
+weaknesses = ["web_search", "data_analysis"]
+is_local = false
+
+[models.gpt-4-1]
+provider = "openai"
+id = "gpt-4.1"
+context_window = 1_047_576
+supports_search_grounding = false
+supports_vision = true
+supports_pdf = false
+supports_cache = false
+supports_reasoning = true
+quality_tier = 5
+speed_tier = 3
+strengths = ["code_review", "complex_reasoning", "documentation", "quick_completion"]
+weaknesses = ["web_search"]
+is_local = false
+
 [models.o1-preview]
 provider = "openai"
 id = "o1-preview"

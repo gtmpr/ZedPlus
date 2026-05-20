@@ -28,6 +28,8 @@ pub enum ReplInput {
     Persona { name: Option<String> },
     /// `/debate [strategy] <query>` — multi-agent brainstorm.
     Debate { strategy: String, query: String },
+    /// `/ui [native|claude|gemini]` — show or change preferred UI style.
+    Ui { style: Option<String> },
     Exit,
 }
 
@@ -173,6 +175,14 @@ pub fn parse(line: &str) -> Option<ReplInput> {
             }
         }
 
+        "/ui" => {
+            if arg1.is_empty() {
+                Some(ReplInput::Ui { style: None })
+            } else {
+                Some(ReplInput::Ui { style: Some(arg1.to_string()) })
+            }
+        }
+
         _ => {
             eprintln!("Unknown command '{cmd}'. Type /help for available commands.");
             None
@@ -201,6 +211,8 @@ pub fn print_help() {
     println!("  /persona off        Clear active persona");
     println!("  /debate <query>     Multi-agent brainstorm using two models (default: debate strategy)");
     println!("  /debate <strategy> <query>  Brainstorm with a specific strategy (debate/red-team/perspectives/delphi)");
-    println!("  @claude/@gemini/@local/@cheap  Prefix query to route to a specific backend");
+    println!("  @claude/@gemini/@codex/@local/@cheap  Prefix query to route to a specific backend");
+    println!("  /ui                 Show current UI style");
+    println!("  /ui native|claude|gemini  Switch preferred UI style (saved to config)");
     println!("  /exit               End session and show summary");
 }

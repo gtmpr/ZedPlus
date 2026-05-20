@@ -26,6 +26,14 @@ output_per_mtok = 0.60
 input_per_mtok = 2.50
 output_per_mtok = 10.00
 
+[models.codex-mini-latest]
+input_per_mtok = 1.50
+output_per_mtok = 6.00
+
+[models.gpt-4.1]
+input_per_mtok = 2.00
+output_per_mtok = 8.00
+
 [models.local]
 input_per_mtok = 0.00
 output_per_mtok = 0.00

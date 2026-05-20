@@ -43,7 +43,7 @@ pub fn select_alias(task: &TaskType, config: &Config, registry: &ModelRegistry) 
 
     let base = base_alias_for_task(task, config);
 
-    match config.routing.priority {
+    let resolved = match config.routing.priority {
         RoutingPriority::Balanced | RoutingPriority::Quality => base,
 
         RoutingPriority::LocalFirst => {
@@ -70,7 +70,26 @@ pub fn select_alias(task: &TaskType, config: &Config, registry: &ModelRegistry) 
             // (CostsTable not available here — resolved at route() level using model IDs)
             base
         }
+    };
+
+    // If the resolved alias isn't in the registry (e.g. default "claude-sonnet" doesn't exist),
+    // pick the best available model for this task type rather than falling through to name inference.
+    if registry.get(&resolved).is_none() {
+        let strength = task_strength(task);
+        if let Some((key, _)) = registry
+            .models
+            .iter()
+            .filter(|(_, m)| {
+                !m.is_local
+                    && (strength.is_empty() || m.strengths.iter().any(|s| s == strength))
+            })
+            .max_by_key(|(_, m)| (m.quality_tier, m.speed_tier))
+        {
+            return key.clone();
+        }
     }
+
+    resolved
 }
 
 /// Find the cheapest model for a task (excluding the currently chosen key).

@@ -51,13 +51,14 @@ impl OllamaBackend {
         messages
     }
 
-    async fn check_status(resp: reqwest::Response) -> Result<reqwest::Response, BackendError> {
+    async fn check_status(resp: reqwest::Response, model_id: &str) -> Result<reqwest::Response, BackendError> {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             if status.as_u16() == 404 {
                 return Err(BackendError::Other(anyhow::anyhow!(
-                    "Ollama model not found — run `ollama pull <model>` to download it"
+                    "Ollama model '{}' not found — run `ollama pull {}` to download it",
+                    model_id, model_id
                 )));
             }
             return Err(BackendError::Other(anyhow::anyhow!(
@@ -89,6 +90,7 @@ impl Backend for OllamaBackend {
                 .send()
                 .await
                 .map_err(map_reqwest_err)?,
+            &opts.model_id,
         )
         .await?;
 
@@ -142,6 +144,7 @@ impl Backend for OllamaBackend {
                 .send()
                 .await
                 .map_err(map_reqwest_err)?,
+            &opts.model_id,
         )
         .await?;
 

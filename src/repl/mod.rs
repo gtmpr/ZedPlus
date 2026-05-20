@@ -255,6 +255,18 @@ async fn run_inner(
     if cli.gemini {
         eprintln!("[zedplus] gemini CLI detected — planning phases will use subscription");
     }
+    if cli.codex_cli {
+        eprintln!("[zedplus] codex CLI detected — code tasks eligible for codex-mini routing");
+    }
+
+    // First-run UI preference prompt — only when the global config file is brand new
+    // (i.e. no config existed before this session started) and a CLI tool is available.
+    let is_first_run = dirs::global_config_file()
+        .map(|p| !p.exists())
+        .unwrap_or(false);
+    if is_first_run && (cli.claude || cli.gemini) {
+        prompt_ui_preference(&cli, cfg);
+    }
 
     // Discover and rank models available from local inference services
     cli.local_models = crate::local_models::discover(&ollama_url, &cli.lmstudio_url).await;
@@ -417,6 +429,10 @@ async fn run_interactive_loop(
                 run_debate_turn(&query, &strategy, session, cfg, ollama_url, cli).await;
                 continue;
             }
+            Some(commands::ReplInput::Ui { style }) => {
+                handle_ui_command(style.as_deref(), cfg);
+                continue;
+            }
             Some(commands::ReplInput::Query { text, flags }) => {
                 // Phase 8d: multi @-mention routing
                 if let Some(segments) = parse_multi_at_mentions(&text) {
@@ -510,6 +526,10 @@ async fn run_pipe_loop(
                 eprintln!("[zedplus] /debate requires an interactive terminal");
                 continue;
             }
+            Some(commands::ReplInput::Ui { style }) => {
+                handle_ui_command(style.as_deref(), cfg);
+                continue;
+            }
             Some(commands::ReplInput::Query { text, flags }) => {
                 let empty_cli = detector::CliDetection::default();
                 run_turn(&text, flags, session, cfg, index_store, embedder, ollama_url, &empty_cli).await?;
@@ -517,6 +537,45 @@ async fn run_pipe_loop(
         }
     }
     Ok(())
+}
+
+fn handle_ui_command(style: Option<&str>, cfg: &config::LoadedConfig) {
+    use config::schema::UiStyle;
+    match style {
+        None => {
+            let current = match cfg.config.behavior.ui_style {
+                UiStyle::Native => "native",
+                UiStyle::ClaudeCode => "claude",
+                UiStyle::GeminiCli => "gemini",
+            };
+            println!("Current UI style: {current}");
+            println!("Change with: /ui native | /ui claude | /ui gemini");
+        }
+        Some(s) => {
+            let new_style = match s.to_ascii_lowercase().as_str() {
+                "native" | "zedplus" => UiStyle::Native,
+                "claude" | "claude-code" | "claudecode" => UiStyle::ClaudeCode,
+                "gemini" | "gemini-cli" => UiStyle::GeminiCli,
+                other => {
+                    eprintln!("Unknown UI style '{}'. Use: native, claude, gemini", other);
+                    return;
+                }
+            };
+            let mut updated = cfg.config.clone();
+            updated.behavior.ui_style = new_style;
+            match config::write_global(&updated) {
+                Ok(()) => {
+                    let name = match s.to_ascii_lowercase().as_str() {
+                        "native" | "zedplus" => "native (ZedPlus)",
+                        "claude" | "claude-code" | "claudecode" => "Claude Code",
+                        _ => "Gemini CLI",
+                    };
+                    println!("UI style set to '{}'. Takes effect on next session start.", name);
+                }
+                Err(e) => eprintln!("Failed to save config: {e}"),
+            }
+        }
+    }
 }
 
 async fn run_turn(
@@ -590,11 +649,30 @@ async fn run_turn(
                         m.id.clone(),
                     )
                 } else {
-                    // model not in discovered list — still try Ollama directly with that id
-                    eprintln!(
-                        "\x1b[33m[@local] '{}' not in discovered models — trying Ollama directly\x1b[0m",
-                        model_id
-                    );
+                    // model not in discovered list — show suggestions, then try Ollama directly
+                    if cli.local_models.is_empty() {
+                        eprintln!(
+                            "\x1b[33m[@local] '{}' not in discovered models (no local models found at startup)\x1b[0m",
+                            model_id
+                        );
+                    } else {
+                        let suggestions: Vec<&str> = cli.local_models.iter()
+                            .filter(|m| m.id.contains(model_id.split(':').next().unwrap_or(model_id)))
+                            .map(|m| m.id.as_str())
+                            .collect();
+                        if suggestions.is_empty() {
+                            let names: Vec<&str> = cli.local_models.iter().map(|m| m.id.as_str()).collect();
+                            eprintln!(
+                                "\x1b[33m[@local] '{}' not found — discovered: {}\x1b[0m",
+                                model_id, names.join(", ")
+                            );
+                        } else {
+                            eprintln!(
+                                "\x1b[33m[@local] '{}' not found — did you mean: {}? Trying Ollama directly…\x1b[0m",
+                                model_id, suggestions.join(", ")
+                            );
+                        }
+                    }
                     (
                         backends::create_backend("ollama", "", ollama_url),
                         "ollama".to_string(),
@@ -1249,6 +1327,7 @@ fn build_at_suggestions(cli: &detector::CliDetection) -> Vec<String> {
     if cli.claude { v.push("@claude".to_string()); }
     if cli.gemini { v.push("@gemini".to_string()); }
     if cli.openai_cli { v.push("@openai".to_string()); }
+    if cli.codex_cli { v.push("@codex".to_string()); }
     if cli.groq { v.push("@groq".to_string()); }
     if cli.qwen { v.push("@qwen".to_string()); }
     v.push("@cheap".to_string());
@@ -1289,6 +1368,7 @@ enum AtOverride {
     Cheap,
     Fast,
     OpenAi,
+    Codex,
     Groq,
     Qwen,
 }
@@ -1316,6 +1396,7 @@ fn parse_at_mentions(query: &str) -> (String, Option<AtOverride>) {
         ("@cheap",  || AtOverride::Cheap),
         ("@fast",   || AtOverride::Fast),
         ("@openai", || AtOverride::OpenAi),
+        ("@codex",  || AtOverride::Codex),
         ("@groq",   || AtOverride::Groq),
         ("@qwen",   || AtOverride::Qwen),
     ];
@@ -1342,7 +1423,7 @@ fn parse_at_mentions(query: &str) -> (String, Option<AtOverride>) {
 fn parse_multi_at_mentions(query: &str) -> Option<Vec<(String, String)>> {
     const PROVIDERS: &[&str] = &[
         "@claude", "@gemini", "@local", "@cheap", "@fast",
-        "@openai", "@groq", "@qwen",
+        "@openai", "@codex", "@groq", "@qwen",
     ];
 
     // Collect all (position, provider) pairs
@@ -1434,6 +1515,11 @@ fn apply_at_override(at: &AtOverride, flags: &mut commands::QueryFlags, cli: &de
             } else {
                 "openai".to_string()
             });
+        }
+        AtOverride::Codex => {
+            // Codex routes to OpenAI API using codex-mini-latest model
+            flags.force_provider = Some("openai".to_string());
+            flags.model = Some("codex-mini".to_string());
         }
         AtOverride::Groq => {
             flags.force_provider = Some(if cli.groq {
@@ -1786,6 +1872,48 @@ fn print_local_model_table(models: &[crate::local_models::DiscoveredModel]) {
     }
     if let Some(e) = crate::local_models::best_for_execution(models) {
         eprintln!("  → Execution: {}", e.id);
+    }
+}
+
+fn prompt_ui_preference(cli: &detector::CliDetection, cfg: &config::LoadedConfig) {
+    use config::schema::UiStyle;
+    use std::io::{BufRead, Write as IoWrite};
+
+    println!("\nFirst run — which UI style do you prefer?");
+    let mut options: Vec<(&str, &str, UiStyle)> = vec![("1", "native  (ZedPlus default)", UiStyle::Native)];
+    if cli.claude {
+        options.push(("2", "claude  (Claude Code style)", UiStyle::ClaudeCode));
+    }
+    if cli.gemini {
+        options.push(("3", "gemini  (Gemini CLI style)", UiStyle::GeminiCli));
+    }
+    for (n, label, _) in &options {
+        println!("  [{n}] {label}");
+    }
+    print!("Choice [1]: ");
+    let _ = std::io::stdout().flush();
+
+    let choice = std::io::stdin().lock().lines().next()
+        .and_then(|l| l.ok())
+        .unwrap_or_default();
+    let choice = choice.trim();
+
+    let selected = options.iter().find(|(n, _, _)| *n == choice)
+        .or_else(|| options.first())
+        .map(|(_, _, s)| s.clone())
+        .unwrap_or(UiStyle::Native);
+
+    let label = match &selected {
+        UiStyle::Native => "native",
+        UiStyle::ClaudeCode => "claude",
+        UiStyle::GeminiCli => "gemini",
+    };
+
+    let mut updated = cfg.config.clone();
+    updated.behavior.ui_style = selected;
+    match config::write_global(&updated) {
+        Ok(()) => println!("UI style set to '{label}'. Change anytime with /ui\n"),
+        Err(e) => eprintln!("Could not save UI preference: {e}"),
     }
 }
 

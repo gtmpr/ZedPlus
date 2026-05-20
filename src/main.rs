@@ -1478,6 +1478,7 @@ pub fn failover_provider(
     let candidates = [
         ("gemini-flash", "google"),
         ("claude-haiku", "anthropic"),
+        ("codex-mini", "openai"),
         ("gpt-4o-mini", "openai"),
         ("lmstudio", "lmstudio"),
         ("local", "ollama"),
