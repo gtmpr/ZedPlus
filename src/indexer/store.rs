@@ -49,6 +49,11 @@ impl IndexStore {
 
     /// Delete all chunks for a file (call before re-indexing).
     pub fn delete_chunks(&self, path: &str) -> Result<()> {
+        // Remove from FTS index before removing from chunks (needs the ids).
+        let _ = self.conn.execute(
+            "DELETE FROM chunks_fts WHERE rowid IN (SELECT id FROM chunks WHERE file_path = ?1)",
+            params![path],
+        );
         self.conn.execute("DELETE FROM chunks WHERE file_path = ?1", params![path])?;
         Ok(())
     }
@@ -66,6 +71,11 @@ impl IndexStore {
             "INSERT INTO chunks (file_path, symbol, content, embedding) VALUES (?1, ?2, ?3, ?4)",
             params![file_path, symbol, content, blob],
         )?;
+        let rowid = self.conn.last_insert_rowid();
+        let _ = self.conn.execute(
+            "INSERT INTO chunks_fts(rowid, file_path, symbol, content) VALUES (?1, ?2, ?3, ?4)",
+            params![rowid, file_path, symbol, content],
+        );
         Ok(())
     }
 
@@ -78,7 +88,7 @@ impl IndexStore {
 
     /// Clear the entire index.
     pub fn clear(&self) -> Result<()> {
-        self.conn.execute_batch("DELETE FROM chunks; DELETE FROM files;")?;
+        self.conn.execute_batch("DELETE FROM chunks_fts; DELETE FROM chunks; DELETE FROM files;")?;
         Ok(())
     }
 
@@ -156,6 +166,75 @@ impl IndexStore {
         Ok(scored.into_iter().map(|(_, chunk)| chunk).collect())
     }
 
+    /// BM25 keyword search via FTS5. Falls back to empty if the table isn't ready.
+    pub fn keyword_search(&self, query: &str, top_k: usize) -> Result<Vec<SimilarChunk>> {
+        let fts_query = fts5_sanitize(query);
+        if fts_query.is_empty() {
+            return Ok(vec![]);
+        }
+        let mut stmt = match self.conn.prepare(
+            "SELECT file_path, symbol, content FROM chunks_fts \
+             WHERE chunks_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+        ) {
+            Ok(s) => s,
+            Err(_) => return Ok(vec![]),
+        };
+        let results: Vec<SimilarChunk> = stmt
+            .query_map(params![fts_query, top_k as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?))
+            })?
+            .enumerate()
+            .filter_map(|(i, r)| {
+                r.ok().map(|(file_path, symbol, content)| SimilarChunk {
+                    file_path,
+                    symbol,
+                    content,
+                    score: 1.0 / (1.0 + i as f32),
+                })
+            })
+            .collect();
+        Ok(results)
+    }
+
+    /// Hybrid search: combines embedding cosine similarity and BM25 via reciprocal rank fusion.
+    /// Gracefully degrades to keyword-only when embeddings are all-zero.
+    pub fn hybrid_search(
+        &self,
+        query_embedding: &[f32],
+        query_text: &str,
+        top_k: usize,
+    ) -> Result<Vec<SimilarChunk>> {
+        const K: f32 = 60.0;
+        let oversample = top_k * 2;
+
+        let embed_hits = self.similarity_search(query_embedding, oversample)?;
+        let keyword_hits = self.keyword_search(query_text, oversample)?;
+
+        if embed_hits.is_empty() && keyword_hits.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut scores: std::collections::HashMap<String, (f32, SimilarChunk)> =
+            std::collections::HashMap::new();
+
+        for (rank, chunk) in embed_hits.into_iter().enumerate() {
+            let key = chunk_key(&chunk);
+            let rrf = 1.0 / (K + rank as f32 + 1.0);
+            scores.entry(key).and_modify(|(s, _)| *s += rrf).or_insert((rrf, chunk));
+        }
+        for (rank, chunk) in keyword_hits.into_iter().enumerate() {
+            let key = chunk_key(&chunk);
+            let rrf = 1.0 / (K + rank as f32 + 1.0);
+            scores.entry(key).and_modify(|(s, _)| *s += rrf).or_insert((rrf, chunk));
+        }
+
+        let mut ranked: Vec<(f32, SimilarChunk)> = scores.into_values().collect();
+        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.truncate(top_k);
+
+        Ok(ranked.into_iter().map(|(score, mut c)| { c.score = score; c }).collect())
+    }
+
     /// Total number of indexed files.
     pub fn file_count(&self) -> Result<i64> {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?)
@@ -165,6 +244,26 @@ impl IndexStore {
     pub fn chunk_count(&self) -> Result<i64> {
         Ok(self.conn.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?)
     }
+}
+
+fn fts5_sanitize(query: &str) -> String {
+    // Strip FTS5 operators; keep alphanumeric, whitespace, and underscores.
+    query
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '_')
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn chunk_key(chunk: &SimilarChunk) -> String {
+    format!(
+        "{}::{}::{}",
+        chunk.file_path,
+        chunk.symbol.as_deref().unwrap_or(""),
+        &chunk.content[..chunk.content.len().min(80)]
+    )
 }
 
 fn unix_now() -> i64 {

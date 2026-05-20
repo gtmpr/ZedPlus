@@ -26,6 +26,12 @@ fn run_migrations(conn: &Connection) {
     let _ = conn.execute_batch("ALTER TABLE usage ADD COLUMN reward_signal REAL DEFAULT 0.0;");
     let _ = conn.execute_batch("ALTER TABLE usage ADD COLUMN edit_accepted INTEGER DEFAULT 0;");
     let _ = conn.execute_batch("ALTER TABLE usage ADD COLUMN session_id TEXT;");
+    // Phase 15: FTS5 keyword index alongside embeddings for hybrid search
+    let _ = conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(\
+            file_path UNINDEXED, symbol, content, tokenize='porter unicode61'\
+        );"
+    );
 }
 
 fn init_schema(conn: &Connection) -> Result<()> {

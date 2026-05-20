@@ -205,7 +205,10 @@ pub fn read_line(prompt: &str, at_suggestions: &[String]) -> Result<Option<Strin
                 }
 
                 (KeyCode::Esc, _) => {
-                    suppress = true;
+                    buf.clear();
+                    cursor_pos = 0;
+                    selected = 0;
+                    suppress = false;
                 }
 
                 (KeyCode::Backspace, _) => {

@@ -219,8 +219,8 @@ pub async fn index_snapshot(root: &Path, ollama_url: &str) -> Result<(u32, i64, 
     Ok((new_files, total_files, total_chunks))
 }
 
-/// Search the index for chunks similar to `query`.
-/// Returns top-K results. Returns empty if embeddings are unavailable.
+/// Search the index using hybrid BM25 + embedding ranking.
+/// Falls back to keyword-only when Ollama is unavailable.
 pub async fn similarity_search(
     query: &str,
     top_k: usize,
@@ -231,9 +231,9 @@ pub async fn similarity_search(
     let embedder = Embedder::new(ollama_url);
 
     if !embedder.is_available().await {
-        return Ok(vec![]);
+        return store.keyword_search(query, top_k);
     }
 
     let embedding = embedder.embed(query).await?;
-    store.similarity_search(&embedding, top_k)
+    store.hybrid_search(&embedding, query, top_k)
 }

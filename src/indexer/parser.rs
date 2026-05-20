@@ -56,19 +56,7 @@ fn extract_chunks(
 
         // Skip trivially small nodes (e.g. empty impls)
         if text.trim().len() > 10 {
-            // Truncate very large chunks at 6000 chars to stay within embedding limits
-            let truncated = if text.len() > 6000 {
-                let cut = find_char_boundary(text, 6000);
-                &text[..cut]
-            } else {
-                text
-            };
-            out.push(Chunk {
-                symbol,
-                content: truncated.to_string(),
-                start_byte: start,
-                end_byte: end,
-            });
+            out.extend(sliding_windows(symbol, text, start, end));
             return; // don't recurse into already-extracted nodes
         }
     }
@@ -145,21 +133,61 @@ fn extract_name(node: &Node, source: &[u8]) -> Option<String> {
     None
 }
 
+const CHUNK_MAX: usize = 6_000;
+const CHUNK_OVERLAP: usize = 500;
+
+/// Split `text` into overlapping windows of at most `CHUNK_MAX` bytes.
+/// Returns a single chunk when the text fits; otherwise emits multiple
+/// overlapping windows so no content is lost.
+fn sliding_windows(symbol: Option<String>, text: &str, base_start: usize, base_end: usize) -> Vec<Chunk> {
+    if text.len() <= CHUNK_MAX {
+        return vec![Chunk {
+            symbol,
+            content: text.to_string(),
+            start_byte: base_start,
+            end_byte: base_end,
+        }];
+    }
+
+    let mut chunks = Vec::new();
+    let mut offset = 0usize;
+    let mut window_idx = 0usize;
+    let step = CHUNK_MAX.saturating_sub(CHUNK_OVERLAP);
+
+    loop {
+        let end = find_char_boundary(text, (offset + CHUNK_MAX).min(text.len()));
+        let win_symbol = if window_idx == 0 {
+            symbol.clone()
+        } else {
+            Some(symbol.as_deref()
+                .map(|s| format!("{s}[{window_idx}]"))
+                .unwrap_or_else(|| format!("[window {window_idx}]")))
+        };
+        chunks.push(Chunk {
+            symbol: win_symbol,
+            content: text[offset..end].to_string(),
+            start_byte: base_start + offset,
+            end_byte: base_start + end,
+        });
+        if end >= text.len() {
+            break;
+        }
+        let next = find_char_boundary(text, (offset + step).min(text.len()));
+        if next <= offset {
+            break;
+        }
+        offset = next;
+        window_idx += 1;
+    }
+
+    chunks
+}
+
 fn whole_file_chunk(content: &str) -> Vec<Chunk> {
     if content.trim().is_empty() {
         return vec![];
     }
-    let truncated = if content.len() > 6000 {
-        &content[..find_char_boundary(content, 6000)]
-    } else {
-        content
-    };
-    vec![Chunk {
-        symbol: None,
-        content: truncated.to_string(),
-        start_byte: 0,
-        end_byte: content.len(),
-    }]
+    sliding_windows(None, content, 0, content.len())
 }
 
 fn find_char_boundary(s: &str, mut idx: usize) -> usize {
@@ -197,7 +225,7 @@ pub fn should_skip_dir(name: &str) -> bool {
     matches!(
         name,
         "target" | "node_modules" | ".git" | "__pycache__" | ".venv" | "venv"
-            | "dist" | "build" | ".next" | ".nuxt" | "vendor" | "coverage"
-            | ".pytest_cache" | ".mypy_cache" | ".ruff_cache"
+            | "dist" | "build" | ".next" | ".nuxt" | "annotated" | "vendor" | "coverage"
+            | ".pytest_cache" | ".mypy_cache" | ".ruff_cache" | ".claude" | ".zedplus"
     )
 }
