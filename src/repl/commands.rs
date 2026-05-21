@@ -62,7 +62,7 @@ pub fn parse(line: &str) -> Option<ReplInput> {
         "/usage" => Some(ReplInput::Usage),
         "/history" | "/log" => Some(ReplInput::History),
         "/index" => Some(ReplInput::Index),
-        "/help" => Some(ReplInput::Help),
+        "/help" | "/palette" => Some(ReplInput::Help),
         "/exit" | "/quit" | "/q" => Some(ReplInput::Exit),
 
         "/explain" => {
@@ -203,21 +203,20 @@ pub fn print_help() {
     println!("  /usage              Show token/cost usage for this session");
     println!("  /history            Show last 20 turns — question, provider, answer summary");
     println!("  /index              Trigger a re-index of the current directory");
+    println!("  /help, /palette     Show this help palette");
+    println!("  /exit               End session and show summary");
+    println!();
+    println!("Routing overrides:");
     println!("  /explain <query>    Send query and show routing decision");
     println!("  /local <query>      Force local model for one query");
     println!("  /cheap <query>      Force cheapest model for one query");
-    println!("  /model              List available model aliases");
     println!("  /model <alias> <q>  Override model for one query (use alias from /model list)");
+    println!("  @claude, @gemini, @local, @cheap  Prefix query to route to a specific backend");
+    println!();
+    println!("Advanced:");
     println!("  /build <desc>       Run multi-phase build pipeline (clarify→arch→plan→build→QC→test→devlog)");
-    println!("  /scope narrow|broad Set scope for next query");
-    println!("  /persona            List developer personas");
     println!("  /persona <name>     Activate a persona (architect/debugger/security/performance/teacher/reviewer/tester/devops)");
-    println!("  /persona off        Clear active persona");
     println!("  /debate <query>     Multi-agent brainstorm using two models (default: debate strategy)");
-    println!("  /debate <strategy> <query>  Brainstorm with a specific strategy (debate/red-team/perspectives/delphi)");
-    println!("  @claude/@gemini/@codex/@local/@cheap  Prefix query to route to a specific backend");
-    println!("  /ui                 Show current UI style");
-    println!("  /ui native|claude|gemini  Switch preferred UI style (saved to config)");
+    println!("  /ui native|claude|gemini|mux  Switch preferred UI style (saved to config)");
     println!("  /fix                Send last test failure to AI for an automatic fix");
-    println!("  /exit               End session and show summary");
 }

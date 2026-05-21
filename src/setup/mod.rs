@@ -247,15 +247,13 @@ fn step_locale() -> Result<LocaleConfig> {
 }
 
 fn step_ui_style(cli: &detector::CliDetection) -> Result<UiStyle> {
-    let mut options: Vec<(&str, UiStyle)> = vec![("ZedPlus native", UiStyle::Native)];
+    let mut options: Vec<(&str, UiStyle)> = vec![("Mux (modern meta-CLI)", UiStyle::Mux)];
+    options.push(("ZedPlus native", UiStyle::Native));
     if cli.claude {
         options.push(("Claude Code style", UiStyle::ClaudeCode));
     }
     if cli.gemini {
         options.push(("Gemini CLI style", UiStyle::GeminiCli));
-    }
-    if cli.claude && cli.gemini {
-        options.push(("Both (auto-switch per provider)", UiStyle::Native));
     }
 
     let labels: Vec<&str> = options.iter().map(|(l, _)| *l).collect();
@@ -264,7 +262,7 @@ fn step_ui_style(cli: &detector::CliDetection) -> Result<UiStyle> {
         .into_iter()
         .find(|(l, _)| *l == choice)
         .map(|(_, s)| s)
-        .unwrap_or(UiStyle::Native);
+        .unwrap_or(UiStyle::Mux);
     Ok(style)
 }
 

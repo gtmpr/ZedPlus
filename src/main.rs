@@ -1210,7 +1210,7 @@ fn cmd_config(args: cli::ConfigArgs) -> Result<()> {
         println!("  routing.architect_editor.enabled            true | false");
         println!("  routing.architect_editor.threshold_lines    <number>");
         println!("  behavior.stream             true | false");
-        println!("  behavior.ui_style           native | claudecode | geminicli");
+        println!("  behavior.ui_style           native | claudecode | geminicli | mux");
         println!("  privacy.cloud_allowed       true | false");
         println!("  training.auto_train         true | false");
         println!("  brainstorm.convergence_threshold  <0.0–1.0>");
@@ -1256,7 +1256,8 @@ fn apply_config_set(cfg: &mut config::schema::Config, key: &str, value: &str) ->
                 "native"      => UiStyle::Native,
                 "claudecode"  => UiStyle::ClaudeCode,
                 "geminicli"   => UiStyle::GeminiCli,
-                _ => anyhow::bail!("ui_style must be: native | claudecode | geminicli"),
+                "mux"         => UiStyle::Mux,
+                _ => anyhow::bail!("ui_style must be: native | claudecode | geminicli | mux"),
             };
         }
         "privacy.cloud_allowed" => {

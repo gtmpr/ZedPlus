@@ -296,7 +296,7 @@ async fn run_inner(
     }
 
     if session.turn_count == 0 {
-        print_header(&session);
+        print_header(&session, cfg, &cli);
         crate::pipeline::print_cascade_preview(cfg, &cli, &ollama_url);
 
         // Background index on a dedicated thread (rusqlite Connection is not Sync,
@@ -380,6 +380,7 @@ async fn run_interactive_loop(
         UiStyle::Native => "> ",
         UiStyle::ClaudeCode => "◆ ",
         UiStyle::GeminiCli => "⬡ ",
+        UiStyle::Mux => "mux ❯ ",
     };
     loop {
         let line = match readline::read_line(prompt, &at_suggestions)? {
@@ -603,17 +604,19 @@ fn handle_ui_command(style: Option<&str>, cfg: &config::LoadedConfig) {
                 UiStyle::Native => "native",
                 UiStyle::ClaudeCode => "claude",
                 UiStyle::GeminiCli => "gemini",
+                UiStyle::Mux => "mux",
             };
             println!("Current UI style: {current}");
-            println!("Change with: /ui native | /ui claude | /ui gemini");
+            println!("Change with: /ui native | /ui claude | /ui gemini | /ui mux");
         }
         Some(s) => {
             let new_style = match s.to_ascii_lowercase().as_str() {
                 "native" | "zedplus" => UiStyle::Native,
                 "claude" | "claude-code" | "claudecode" => UiStyle::ClaudeCode,
                 "gemini" | "gemini-cli" => UiStyle::GeminiCli,
+                "mux" | "metacli" => UiStyle::Mux,
                 other => {
-                    eprintln!("Unknown UI style '{}'. Use: native, claude, gemini", other);
+                    eprintln!("Unknown UI style '{}'. Use: native, claude, gemini, mux", other);
                     return;
                 }
             };
@@ -624,6 +627,7 @@ fn handle_ui_command(style: Option<&str>, cfg: &config::LoadedConfig) {
                     let name = match s.to_ascii_lowercase().as_str() {
                         "native" | "zedplus" => "native (ZedPlus)",
                         "claude" | "claude-code" | "claudecode" => "Claude Code",
+                        "mux" | "metacli" => "Mux Meta-CLI",
                         _ => "Gemini CLI",
                     };
                     println!("UI style set to '{}'. Takes effect on next session start.", name);
@@ -2106,7 +2110,12 @@ async fn generate_session_name(
     Some(name)
 }
 
-fn print_header(session: &Session) {
+fn print_header(session: &Session, cfg: &config::LoadedConfig, cli: &detector::CliDetection) {
+    if matches!(cfg.config.behavior.ui_style, UiStyle::Mux) {
+        print_mux_header(session, cfg, cli);
+        return;
+    }
+
     let branch = session
         .git_branch
         .as_deref()
@@ -2117,6 +2126,39 @@ fn print_header(session: &Session) {
         "ZedPlus — {} ({}){}{}\nType your query or /help. Use /agent to toggle agentic mode.\n",
         session.model_key, session.provider, branch, mode
     );
+}
+
+fn print_mux_header(session: &Session, cfg: &config::LoadedConfig, cli: &detector::CliDetection) {
+    let branch = session.git_branch.as_deref().unwrap_or("main");
+    let now = Utc::now().format("%H:%M").to_string();
+    
+    // Count "healthy" providers: detected CLIs + cloud providers with keys + local models
+    let mut healthy = 0;
+    if cli.claude { healthy += 1; }
+    if cli.gemini { healthy += 1; }
+    if cli.openai_cli { healthy += 1; }
+    if cli.groq { healthy += 1; }
+    if !cli.local_models.is_empty() { healthy += 1; }
+    
+    // Check cloud API keys (simple heuristic)
+    if crate::get_api_key("claude", cfg).is_ok() && !cli.claude { healthy += 1; }
+    if crate::get_api_key("gemini", cfg).is_ok() && !cli.gemini { healthy += 1; }
+    if crate::get_api_key("openai", cfg).is_ok() && !cli.openai_cli { healthy += 1; }
+
+    println!("\x1b[1;32mmux\x1b[0m \x1b[90m— meta-CLI for AI agents\x1b[0m \x1b[90m{:>45}\x1b[0m", now);
+    println!("\x1b[90m{}\x1b[0m", "━".repeat(70));
+    
+    println!(
+        "\x1b[1m{:>10}\x1b[0m {:<15} \x1b[1m{:>10}\x1b[0m {:<15} \x1b[1m{:>10}\x1b[0m {:<15}",
+        "REQS", session.turn_count,
+        "TOKENS", format!("{}k", (session.session_tokens_in + session.session_tokens_out) / 1000),
+        "COST", format!("${:.2}", session.session_total_cost)
+    );
+    
+    println!("\x1b[90m{}\x1b[0m", "━".repeat(70));
+    println!("\x1b[90mbranch:\x1b[0m {} \x1b[90m| healthy:\x1b[0m {} \x1b[90m| model:\x1b[0m {} \x1b[90m| provider:\x1b[0m {}", 
+        branch, healthy, session.model_key, session.provider);
+    println!();
 }
 
 fn print_exit_summary(session: &Session) {
@@ -2269,12 +2311,13 @@ fn prompt_ui_preference(cli: &detector::CliDetection, cfg: &config::LoadedConfig
     use std::io::{BufRead, Write as IoWrite};
 
     println!("\nFirst run — which UI style do you prefer?");
-    let mut options: Vec<(&str, &str, UiStyle)> = vec![("1", "native  (ZedPlus default)", UiStyle::Native)];
+    let mut options: Vec<(&str, &str, UiStyle)> = vec![("1", "mux     (Mux default)", UiStyle::Mux)];
+    options.push(("2", "native  (ZedPlus legacy style)", UiStyle::Native));
     if cli.claude {
-        options.push(("2", "claude  (Claude Code style)", UiStyle::ClaudeCode));
+        options.push(("3", "claude  (Claude Code style)", UiStyle::ClaudeCode));
     }
     if cli.gemini {
-        options.push(("3", "gemini  (Gemini CLI style)", UiStyle::GeminiCli));
+        options.push(("4", "gemini  (Gemini CLI style)", UiStyle::GeminiCli));
     }
     for (n, label, _) in &options {
         println!("  [{n}] {label}");
@@ -2290,12 +2333,13 @@ fn prompt_ui_preference(cli: &detector::CliDetection, cfg: &config::LoadedConfig
     let selected = options.iter().find(|(n, _, _)| *n == choice)
         .or_else(|| options.first())
         .map(|(_, _, s)| s.clone())
-        .unwrap_or(UiStyle::Native);
+        .unwrap_or(UiStyle::Mux);
 
     let label = match &selected {
         UiStyle::Native => "native",
         UiStyle::ClaudeCode => "claude",
         UiStyle::GeminiCli => "gemini",
+        UiStyle::Mux => "mux",
     };
 
     let mut updated = cfg.config.clone();

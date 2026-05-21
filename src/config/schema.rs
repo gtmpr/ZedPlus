@@ -171,10 +171,11 @@ pub struct PrivacyConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum UiStyle {
-    #[default]
     Native,
     ClaudeCode,
     GeminiCli,
+    #[default]
+    Mux,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,7 +193,7 @@ impl Default for BehaviorConfig {
             default_scope: Scope::Narrow,
             stream: true,
             cost_nudge_threshold_usd: 0.50,
-            ui_style: UiStyle::Native,
+            ui_style: UiStyle::Mux,
         }
     }
 }
